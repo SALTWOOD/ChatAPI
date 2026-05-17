@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -20,6 +21,7 @@ class PendingTurn:
     draft_text: str = ""
     aborted: bool = False
     abort_message: str = ""
+    resolved: bool = False
     response_mode: str = "assistant_message"
     response_output_items: list[dict[str, Any]] = field(default_factory=list)
     response_output_text: str = ""
@@ -84,6 +86,8 @@ class PendingTurnRegistry:
             pending = self._by_request_id.get(request_id)
             if pending is None or pending.owner_id != owner_id:
                 raise ValueError("conversation is not waiting for a reply")
+            if pending.resolved or pending.event.is_set():
+                raise ValueError("conversation reply is already completed")
             pending.assistant_text = assistant_text
             pending.response_id = response_id
             pending.response_mode = response_mode
@@ -91,9 +95,19 @@ class PendingTurnRegistry:
             pending.response_output_text = (
                 assistant_text if response_output_text is None else response_output_text
             )
+            pending.resolved = True
             pending.stream_event.set()
             pending.event.set()
             return pending
+
+    def consume_draft_chunks(self, request_id: str) -> list[str]:
+        with self._lock:
+            pending = self._by_request_id.get(request_id)
+            if pending is None:
+                return []
+            chunks = list(pending.draft_chunks)
+            pending.draft_chunks.clear()
+            return chunks
 
     def add_draft(
         self,
@@ -109,6 +123,8 @@ class PendingTurnRegistry:
             pending = self._by_request_id.get(request_id)
             if pending is None or pending.owner_id != owner_id:
                 raise ValueError("conversation is not waiting for a reply")
+            if pending.resolved or pending.event.is_set():
+                raise ValueError("conversation reply is already completed")
             pending.draft_chunks.append(chunk)
             pending.draft_text += chunk
             pending.stream_event.set()
@@ -128,6 +144,8 @@ class PendingTurnRegistry:
             pending = self._by_request_id.get(request_id)
             if pending is None or pending.owner_id != owner_id:
                 raise ValueError("conversation is not waiting for a reply")
+            if pending.resolved or pending.event.is_set():
+                raise ValueError("conversation reply is already completed")
             pending.aborted = True
             pending.abort_message = error_message
             pending.stream_event.set()

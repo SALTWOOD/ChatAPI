@@ -92,7 +92,7 @@ def stream_pending_turn(
 
     def generate():
         sequence = 0
-        sent_text = ""
+        sent_final_text = ""
         emitted_text_item = False
         last_heartbeat_at = time.monotonic()
 
@@ -168,11 +168,10 @@ def stream_pending_turn(
                     discard_pending_turn(pending, pending_turns=pending_turns, store=store)
                     return
 
-                while pending.draft_chunks:
-                    chunk = pending.draft_chunks.pop(0)
+                for chunk in pending_turns.consume_draft_chunks(pending.request_id):
                     for event_chunk in ensure_text_item():
                         yield event_chunk
-                    sent_text = pending.draft_text[: len(sent_text) + len(chunk)]
+                    sent_final_text += chunk
                     yield emit(
                         "response.output_text.delta",
                         {
@@ -190,7 +189,6 @@ def stream_pending_turn(
                     if now - last_heartbeat_at >= heartbeat_interval:
                         for event_chunk in ensure_text_item():
                             yield event_chunk
-                        sent_text += pending.heartbeat_text
                         yield emit(
                             "response.output_text.delta",
                             {
@@ -252,13 +250,13 @@ def stream_pending_turn(
                     else:
                         for event_chunk in ensure_text_item():
                             yield event_chunk
-                        if final_text.startswith(sent_text):
-                            remaining = final_text[len(sent_text):]
+                        if final_text.startswith(sent_final_text):
+                            remaining = final_text[len(sent_final_text):]
                         else:
                             remaining = final_text
-                            sent_text = ""
+                            sent_final_text = ""
                         if remaining:
-                            sent_text += remaining
+                            sent_final_text += remaining
                             yield emit(
                                 "response.output_text.delta",
                                 {
