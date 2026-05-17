@@ -1,7 +1,7 @@
 # ChatAPI 部署说明
 
-本项目是一个让别人用 OpenAI Responses 风格接口调用人类的项目，并带有一个 Web 控制台界面，可以帮你组装 Tool Calling 请求。
-你可以让别人把你配置到 Agent 或 聊天机器人中，然后自己扮演 AI 助手 被调用。
+本项目是一个让 各类 AI 客户端用 OpenAI Responses 风格接口调用人类的项目，并带有一个 Web 控制台界面，可以帮你组装 Tool Calling 请求。  
+你可以让别人把你配置到 Agent 或 聊天机器人中，然后自己扮演 AI 助手被调用。
 
 - 后端：Flask
 - 前端：React + Vite + Ant Design
@@ -127,16 +127,8 @@ server {
 - `POST /api/conversations/<id>/rename`
 - `POST /v1/responses`
 
-核心接口是 `/v1/responses`，接受 OpenAI Responses 风格请求，例如：
-
-```json
-{
-  "model": "mock-gpt-4.1-mini",
-  "input": "请返回一条 mock 响应"
-}
-```
-
-调用示例：
+核心接口是 `/v1/responses`，接受 OpenAI Responses 风格请求，例如：  
+调用示例：  
 
 ```bash
 curl https://127.0.0.1:5000/v1/responses \
