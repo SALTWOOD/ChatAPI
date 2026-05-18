@@ -29,7 +29,6 @@ def stream_anthropic_turn(
     def generate():
         sent_text = ""
         block_started = False
-        last_heartbeat_at = time.monotonic()
         try:
             yield sse_data(
                 {
@@ -73,23 +72,6 @@ def stream_anthropic_turn(
                             },
                         }
                     )
-
-                heartbeat_interval = max(0.0, float(pending.heartbeat_interval_seconds or 0.0))
-                if heartbeat_interval > 0 and pending.heartbeat_text:
-                    now = time.monotonic()
-                    if now - last_heartbeat_at >= heartbeat_interval:
-                        sent_text += pending.heartbeat_text
-                        yield sse_data(
-                            {
-                                "type": "content_block_delta",
-                                "index": 0,
-                                "delta": {
-                                    "type": "text_delta",
-                                    "text": pending.heartbeat_text,
-                                },
-                            }
-                        )
-                        last_heartbeat_at = now
 
                 if pending.event.is_set():
                     finalized = pending_turns.wait(pending.request_id)
@@ -163,11 +145,7 @@ def stream_anthropic_turn(
                     yield sse_data({"type": "message_stop"})
                     return
 
-                wait_timeout = 0.5
-                if heartbeat_interval > 0 and pending.heartbeat_text:
-                    elapsed = time.monotonic() - last_heartbeat_at
-                    wait_timeout = max(0.05, min(0.5, heartbeat_interval - elapsed))
-                pending.stream_event.wait(wait_timeout)
+                pending.stream_event.wait(0.5)
                 pending.stream_event.clear()
         except GeneratorExit:
             discard_pending_turn(pending, pending_turns=pending_turns, store=store)

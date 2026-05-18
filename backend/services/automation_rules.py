@@ -1,0 +1,312 @@
+from __future__ import annotations
+
+import json
+import re
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+from .output_controller import TurnOutputController
+from .pending import PendingTurn
+
+AUTOMATION_RULES_KEY = "automation_rules_json"
+LEGACY_HEARTBEAT_RULE_ID = "legacy-heartbeat"
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text:
+            result.append(text)
+    return result
+
+
+def _as_non_negative_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        raise ValueError("timing values must be numbers")
+
+
+def _normalize_match_entries(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                result.append({"match_type": "substring", "pattern": text})
+            continue
+        if not isinstance(item, dict):
+            continue
+        pattern = str(item.get("pattern") or "").strip()
+        if not pattern:
+            continue
+        match_type = str(item.get("match_type") or "substring").strip() or "substring"
+        result.append(
+            {
+                "match_type": match_type,
+                "pattern": pattern,
+            }
+        )
+    return result
+
+
+@dataclass(frozen=True)
+class AutomationRule:
+    id: str
+    enabled: bool
+    contains: list[dict[str, str]]
+    excludes: list[dict[str, str]]
+    delay_seconds: float
+    repeat_interval_seconds: float
+    action_type: str
+    action_text: str
+    error_message: str
+
+    def matches(self, input_text: str) -> bool:
+        if self.contains and not all(_match_pattern(item, input_text) for item in self.contains):
+            return False
+        if any(_match_pattern(item, input_text) for item in self.excludes):
+            return False
+        return True
+
+
+def _match_pattern(item: dict[str, str], input_text: str) -> bool:
+    match_type = str(item.get("match_type") or "substring").strip() or "substring"
+    pattern = str(item.get("pattern") or "")
+    if not pattern:
+        return False
+    if match_type == "regex":
+        try:
+            return re.search(pattern, input_text) is not None
+        except re.error:
+            return False
+    return pattern in input_text
+
+
+def normalize_rule_payload(raw_rule: dict[str, Any]) -> dict[str, Any]:
+    conditions = raw_rule.get("conditions")
+    timing = raw_rule.get("timing")
+    action = raw_rule.get("action")
+    if not isinstance(conditions, dict):
+        conditions = {}
+    if not isinstance(timing, dict):
+        timing = {}
+    if not isinstance(action, dict):
+        action = {}
+    delay_seconds = _as_non_negative_float(timing.get("delay_seconds"))
+    repeat_interval_seconds = _as_non_negative_float(timing.get("repeat_interval_seconds"))
+    return {
+        "id": str(raw_rule.get("id") or f"rule_{uuid.uuid4().hex[:8]}"),
+        "enabled": bool(raw_rule.get("enabled", True)),
+        "conditions": {
+            "contains": _normalize_match_entries(conditions.get("contains")),
+            "excludes": _normalize_match_entries(conditions.get("excludes")),
+        },
+        "timing": {
+            "delay_seconds": delay_seconds,
+            "repeat_interval_seconds": repeat_interval_seconds,
+        },
+        "action": {
+            "type": str(action.get("type") or "").strip(),
+            "text": str(action.get("text") or ""),
+            "error_message": str(action.get("error_message") or ""),
+        },
+    }
+
+
+def validate_rule_payload(raw_rule: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(raw_rule, dict):
+        return None, "rule must be an object"
+    try:
+        normalized = normalize_rule_payload(raw_rule)
+    except ValueError as error:
+        return None, str(error)
+    if normalized["timing"]["delay_seconds"] < 0:
+        return None, "delay_seconds must be greater than or equal to 0"
+    if normalized["timing"]["repeat_interval_seconds"] < 0:
+        return None, "repeat_interval_seconds must be greater than or equal to 0"
+    for group_name in ("contains", "excludes"):
+        for item in normalized["conditions"][group_name]:
+            match_type = str(item.get("match_type") or "")
+            pattern = str(item.get("pattern") or "")
+            if match_type not in {"substring", "regex"}:
+                return None, "condition match_type must be substring or regex"
+            if not pattern:
+                return None, "condition pattern is required"
+            if match_type == "regex":
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    return None, f"invalid regex: {error}"
+    action_type = normalized["action"]["type"]
+    if action_type not in {"output_text", "complete", "error"}:
+        return None, "action.type must be one of output_text, complete, error"
+    if action_type == "output_text" and not normalized["action"]["text"]:
+        return None, "output_text rule requires action.text"
+    if action_type == "error" and not normalized["action"]["error_message"]:
+        return None, "error rule requires action.error_message"
+    return normalized, None
+
+
+def materialize_rule(payload: dict[str, Any]) -> AutomationRule:
+    return AutomationRule(
+        id=str(payload["id"]),
+        enabled=bool(payload["enabled"]),
+        contains=list(payload["conditions"]["contains"]),
+        excludes=list(payload["conditions"]["excludes"]),
+        delay_seconds=float(payload["timing"]["delay_seconds"]),
+        repeat_interval_seconds=float(payload["timing"]["repeat_interval_seconds"]),
+        action_type=str(payload["action"]["type"]),
+        action_text=str(payload["action"]["text"]),
+        error_message=str(payload["action"]["error_message"]),
+    )
+
+
+class AutomationRuleEngine:
+    def __init__(self, *, store: Any, output_controller: TurnOutputController):
+        self._store = store
+        self._output_controller = output_controller
+
+    def load_rule_payloads(self) -> list[dict[str, Any]]:
+        raw = self._store.get_config(AUTOMATION_RULES_KEY, "[]")
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = []
+        if not isinstance(data, list):
+            return []
+        result: list[dict[str, Any]] = []
+        for item in data:
+            normalized, error = validate_rule_payload(item)
+            if normalized is None or error is not None:
+                continue
+            result.append(normalized)
+        return result
+
+    def save_rule_payloads(self, rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        validated: list[dict[str, Any]] = []
+        for item in rules:
+            normalized, error = validate_rule_payload(item)
+            if normalized is None:
+                raise ValueError(error or "invalid rule")
+            validated.append(normalized)
+        self._store.set_config(AUTOMATION_RULES_KEY, json.dumps(validated, ensure_ascii=False))
+        return validated
+
+    def get_heartbeat_rule_settings(self) -> dict[str, Any]:
+        for rule in self.load_rule_payloads():
+            if str(rule.get("id")) != LEGACY_HEARTBEAT_RULE_ID:
+                continue
+            text = str(rule["action"]["text"])
+            interval = float(rule["timing"]["repeat_interval_seconds"] or 0.0)
+            return {
+                "heartbeat_text": text,
+                "heartbeat_interval_seconds": interval,
+            }
+        return {
+            "heartbeat_text": "",
+            "heartbeat_interval_seconds": 0.0,
+        }
+
+    def update_heartbeat_rule_settings(self, *, heartbeat_text: str, interval_seconds: float) -> dict[str, Any]:
+        rules = [rule for rule in self.load_rule_payloads() if str(rule.get("id")) != LEGACY_HEARTBEAT_RULE_ID]
+        if heartbeat_text and interval_seconds > 0:
+            rules.append(
+                {
+                    "id": LEGACY_HEARTBEAT_RULE_ID,
+                    "enabled": True,
+                    "conditions": {"contains": [], "excludes": []},
+                    "timing": {
+                        "delay_seconds": float(interval_seconds),
+                        "repeat_interval_seconds": float(interval_seconds),
+                    },
+                    "action": {
+                        "type": "output_text",
+                        "text": heartbeat_text,
+                        "error_message": "",
+                    },
+                }
+            )
+        self.save_rule_payloads(rules)
+        return {
+            "heartbeat_text": heartbeat_text,
+            "heartbeat_interval_seconds": float(interval_seconds),
+        }
+
+    def start_for_pending(self, pending: PendingTurn) -> None:
+        input_text = pending.input_text
+        rules = [
+            materialize_rule(payload)
+            for payload in self.load_rule_payloads()
+            if bool(payload.get("enabled", True))
+        ]
+        for rule in rules:
+            if not rule.matches(input_text):
+                continue
+            worker = threading.Thread(
+                target=self._run_rule,
+                args=(pending, rule),
+                daemon=True,
+                name=f"automation-rule-{rule.id}",
+            )
+            worker.start()
+
+    def _run_rule(self, pending: PendingTurn, rule: AutomationRule) -> None:
+        owner_id = pending.owner_id
+        conversation_id = pending.conversation_id
+        if self._sleep_until_ready(pending, rule.delay_seconds):
+            return
+        while True:
+            if pending.event.is_set():
+                return
+            try:
+                if rule.action_type == "output_text":
+                    self._output_controller.add_text_delta(
+                        conversation_id=conversation_id,
+                        owner_id=owner_id,
+                        text=rule.action_text,
+                    )
+                elif rule.action_type == "complete":
+                    self._output_controller.complete_assistant_message(
+                        conversation_id=conversation_id,
+                        owner_id=owner_id,
+                        text=rule.action_text,
+                        provider="rule",
+                    )
+                    return
+                elif rule.action_type == "error":
+                    self._output_controller.abort(
+                        conversation_id=conversation_id,
+                        owner_id=owner_id,
+                        error_message=rule.error_message,
+                    )
+                    return
+            except ValueError:
+                return
+
+            if rule.repeat_interval_seconds <= 0:
+                return
+            if self._sleep_until_ready(pending, rule.repeat_interval_seconds):
+                return
+
+    @staticmethod
+    def _sleep_until_ready(pending: PendingTurn, duration_seconds: float) -> bool:
+        remaining = max(0.0, float(duration_seconds))
+        while remaining > 0:
+            if pending.event.wait(min(0.25, remaining)):
+                return True
+            remaining -= min(0.25, remaining)
+        return pending.event.is_set()

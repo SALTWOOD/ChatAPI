@@ -46,7 +46,6 @@ def stream_chat_completion_turn(
     def generate():
         sent_text = ""
         sent_role = False
-        last_heartbeat_at = time.monotonic()
         try:
             while True:
                 if client_disconnected(client_socket):
@@ -60,18 +59,6 @@ def stream_chat_completion_turn(
                         sent_role = True
                     sent_text += piece
                     yield sse_data(chunk(delta))
-
-                heartbeat_interval = max(0.0, float(pending.heartbeat_interval_seconds or 0.0))
-                if heartbeat_interval > 0 and pending.heartbeat_text:
-                    now = time.monotonic()
-                    if now - last_heartbeat_at >= heartbeat_interval:
-                        delta = {"content": pending.heartbeat_text}
-                        if not sent_role:
-                            delta["role"] = "assistant"
-                            sent_role = True
-                        sent_text += pending.heartbeat_text
-                        yield sse_data(chunk(delta))
-                        last_heartbeat_at = now
 
                 if pending.event.is_set():
                     finalized = pending_turns.wait(pending.request_id)
@@ -127,11 +114,7 @@ def stream_chat_completion_turn(
                     yield sse_data("[DONE]")
                     return
 
-                wait_timeout = 0.5
-                if heartbeat_interval > 0 and pending.heartbeat_text:
-                    elapsed = time.monotonic() - last_heartbeat_at
-                    wait_timeout = max(0.05, min(0.5, heartbeat_interval - elapsed))
-                pending.stream_event.wait(wait_timeout)
+                pending.stream_event.wait(0.5)
                 pending.stream_event.clear()
         except GeneratorExit:
             discard_pending_turn(pending, pending_turns=pending_turns, store=store)

@@ -57,8 +57,6 @@ def stream_pending_turn(
         sequence = 0
         sent_final_text = ""
         emitted_text_item = False
-        last_heartbeat_at = time.monotonic()
-
         def emit(event: str, data: dict[str, Any]) -> str:
             nonlocal sequence
             payload = dict(data)
@@ -145,24 +143,6 @@ def stream_pending_turn(
                             "output_index": 0,
                         },
                     )
-
-                heartbeat_interval = max(0.0, float(pending.heartbeat_interval_seconds or 0.0))
-                if heartbeat_interval > 0 and pending.heartbeat_text:
-                    now = time.monotonic()
-                    if now - last_heartbeat_at >= heartbeat_interval:
-                        for event_chunk in ensure_text_item():
-                            yield event_chunk
-                        yield emit(
-                            "response.output_text.delta",
-                            {
-                                "type": "response.output_text.delta",
-                                "content_index": 0,
-                                "delta": pending.heartbeat_text,
-                                "item_id": message_id,
-                                "output_index": 0,
-                            },
-                        )
-                        last_heartbeat_at = now
 
                 if pending.event.is_set():
                     finalized = pending_turns.wait(pending.request_id)
@@ -292,11 +272,7 @@ def stream_pending_turn(
                     )
                     return
 
-                wait_timeout = 0.5
-                if heartbeat_interval > 0 and pending.heartbeat_text:
-                    elapsed = time.monotonic() - last_heartbeat_at
-                    wait_timeout = max(0.05, min(0.5, heartbeat_interval - elapsed))
-                pending.stream_event.wait(wait_timeout)
+                pending.stream_event.wait(0.5)
                 pending.stream_event.clear()
         except GeneratorExit:
             discard_pending_turn(pending, pending_turns=pending_turns, store=store)

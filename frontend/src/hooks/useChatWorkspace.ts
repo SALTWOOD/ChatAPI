@@ -8,13 +8,14 @@ import {
   normalizeToolFieldValue,
 } from '../lib/chat-format'
 import type {
+  AutomationRuleCondition,
+  AutomationRule,
   AuthSession,
   AuthUser,
   ComposerMode,
   Conversation,
   MessageItem,
   ResponsesPayload,
-  StreamHeartbeatConfig,
   ToolFieldValue,
   VisibleMessage,
 } from '../types/chat'
@@ -47,10 +48,11 @@ export function useChatWorkspace(isMobile: boolean) {
   const [abortingConversationId, setAbortingConversationId] = useState('')
   const [abortPopoverConversationId, setAbortPopoverConversationId] = useState('')
   const [abortReason, setAbortReason] = useState('')
-  const [streamHeartbeatModalOpen, setStreamHeartbeatModalOpen] = useState(false)
-  const [streamHeartbeatText, setStreamHeartbeatText] = useState('')
-  const [streamHeartbeatIntervalSeconds, setStreamHeartbeatIntervalSeconds] = useState<number>(0)
-  const [savingStreamHeartbeatConfig, setSavingStreamHeartbeatConfig] = useState(false)
+  const [automationRulesModalOpen, setAutomationRulesModalOpen] = useState(false)
+  const [automationRuleEditorOpen, setAutomationRuleEditorOpen] = useState(false)
+  const [automationRules, setAutomationRules] = useState<AutomationRule[]>([])
+  const [editingAutomationRule, setEditingAutomationRule] = useState<AutomationRule | null>(null)
+  const [savingAutomationRules, setSavingAutomationRules] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
@@ -105,7 +107,7 @@ export function useChatWorkspace(isMobile: boolean) {
         if (!active) return
         setAuth(session)
         if (session.authenticated) {
-          await loadStreamHeartbeatConfig()
+          await loadAutomationRules()
           await loadConversations()
         }
       } catch (error) {
@@ -272,7 +274,7 @@ export function useChatWorkspace(isMobile: boolean) {
       })
       const session = await requestJson<AuthSession>('/api/auth/session')
       setAuth(session)
-      await loadStreamHeartbeatConfig()
+      await loadAutomationRules()
       await loadConversations()
       message.success('登录成功')
     } catch (error) {
@@ -296,53 +298,145 @@ export function useChatWorkspace(isMobile: boolean) {
       setToolCallId('')
       setToolFormValues({})
       setDraftBuffers({})
-      setStreamHeartbeatModalOpen(false)
-      setStreamHeartbeatText('')
-      setStreamHeartbeatIntervalSeconds(0)
+      setAutomationRulesModalOpen(false)
+      setAutomationRuleEditorOpen(false)
+      setAutomationRules([])
+      setEditingAutomationRule(null)
       localStorage.removeItem(STORAGE_KEY)
       message.info('已退出登录')
     }
   }
 
-  async function loadStreamHeartbeatConfig() {
-    const data = await requestJson<StreamHeartbeatConfig & { ok?: boolean }>(
-      '/api/config/stream-heartbeat',
+  async function loadAutomationRules() {
+    const data = await requestJson<{ ok?: boolean; rules?: AutomationRule[] }>(
+      '/api/config/automation-rules',
     )
-    setStreamHeartbeatText(data.heartbeat_text ?? '')
-    setStreamHeartbeatIntervalSeconds(
-      typeof data.heartbeat_interval_seconds === 'number'
-        ? data.heartbeat_interval_seconds
-        : 0,
-    )
+    setAutomationRules(Array.isArray(data.rules) ? data.rules : [])
   }
 
-  async function handleSaveStreamHeartbeatConfig() {
-    if (streamHeartbeatIntervalSeconds < 0) {
-      message.warning('间隔时间必须大于等于 0')
-      return
+  function buildEmptyAutomationRule(): AutomationRule {
+    return {
+      id: `rule_${Math.random().toString(36).slice(2, 10)}`,
+      enabled: true,
+      conditions: {
+        contains: [],
+        excludes: [],
+      },
+      timing: {
+        delay_seconds: 0,
+        repeat_interval_seconds: 0,
+      },
+      action: {
+        type: 'output_text',
+        text: '',
+        error_message: '',
+      },
     }
+  }
 
-    setSavingStreamHeartbeatConfig(true)
+  async function persistAutomationRules(nextRules: AutomationRule[], successText = '规则已保存') {
+    setSavingAutomationRules(true)
     try {
-      const response = await requestJson<StreamHeartbeatConfig & { ok: boolean }>(
-        '/api/config/stream-heartbeat',
+      const response = await requestJson<{ ok: boolean; rules: AutomationRule[] }>(
+        '/api/config/automation-rules',
         {
           method: 'POST',
           body: JSON.stringify({
-            heartbeat_text: streamHeartbeatText,
-            heartbeat_interval_seconds: streamHeartbeatIntervalSeconds,
+            rules: nextRules,
           }),
         },
       )
-      setStreamHeartbeatText(response.heartbeat_text)
-      setStreamHeartbeatIntervalSeconds(response.heartbeat_interval_seconds)
-      setStreamHeartbeatModalOpen(false)
-      message.success('设置已保存')
+      setAutomationRules(response.rules)
+      message.success(successText)
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '设置保存失败')
+      message.error(error instanceof Error ? error.message : '规则保存失败')
+      throw error
     } finally {
-      setSavingStreamHeartbeatConfig(false)
+      setSavingAutomationRules(false)
     }
+  }
+
+  async function handleSaveAutomationRule(rule: AutomationRule) {
+    const normalized: AutomationRule = {
+      ...rule,
+      conditions: {
+        contains: normalizeRuleConditions(rule.conditions.contains),
+        excludes: normalizeRuleConditions(rule.conditions.excludes),
+      },
+      timing: {
+        delay_seconds: Number(rule.timing.delay_seconds) || 0,
+        repeat_interval_seconds: Number(rule.timing.repeat_interval_seconds) || 0,
+      },
+      action: {
+        ...rule.action,
+        text: rule.action.text ?? '',
+        error_message: rule.action.error_message ?? '',
+      },
+    }
+
+    if (normalized.timing.delay_seconds < 0 || normalized.timing.repeat_interval_seconds < 0) {
+      message.warning('时间配置必须大于等于 0')
+      return
+    }
+    if (normalized.action.type === 'output_text' && !normalized.action.text.trim()) {
+      message.warning('输出指定文本时必须填写文本')
+      return
+    }
+    if (normalized.action.type === 'error' && !normalized.action.error_message.trim()) {
+      message.warning('返回 error 时必须填写错误信息')
+      return
+    }
+
+    const nextRules = automationRules.some((item) => item.id === normalized.id)
+      ? automationRules.map((item) => (item.id === normalized.id ? normalized : item))
+      : [...automationRules, normalized]
+    await persistAutomationRules(nextRules)
+    setAutomationRuleEditorOpen(false)
+    setEditingAutomationRule(null)
+  }
+
+  function normalizeRuleConditions(items: AutomationRuleCondition[]): AutomationRuleCondition[] {
+    return items
+      .map((item) => ({
+        match_type:
+          item.match_type === 'regex'
+            ? ('regex' as const)
+            : ('substring' as const),
+        pattern: item.pattern.trim(),
+      }))
+      .filter((item) => item.pattern)
+  }
+
+  async function handleDeleteAutomationRule(ruleId: string) {
+    const nextRules = automationRules.filter((item) => item.id !== ruleId)
+    await persistAutomationRules(nextRules, '规则已删除')
+  }
+
+  async function handleToggleAutomationRule(ruleId: string, enabled: boolean) {
+    const nextRules = automationRules.map((item) =>
+      item.id === ruleId ? { ...item, enabled } : item,
+    )
+    await persistAutomationRules(nextRules, enabled ? '规则已启用' : '规则已停用')
+  }
+
+  function handleCreateAutomationRule() {
+    setEditingAutomationRule(buildEmptyAutomationRule())
+    setAutomationRuleEditorOpen(true)
+  }
+
+  function handleEditAutomationRule(ruleId: string) {
+    const rule = automationRules.find((item) => item.id === ruleId)
+    if (!rule) return
+    setEditingAutomationRule({
+      ...rule,
+      conditions: {
+        contains: [...rule.conditions.contains],
+        excludes: [...rule.conditions.excludes],
+      },
+      timing: { ...rule.timing },
+      action: { ...rule.action },
+    })
+    setAutomationRuleEditorOpen(true)
   }
 
   async function handleSelectConversation(conversationId: string) {
@@ -616,7 +710,9 @@ export function useChatWorkspace(isMobile: boolean) {
     pruneKeepCount,
     pruneModalOpen,
     pruningConversations,
-    savingStreamHeartbeatConfig,
+    automationRuleEditorOpen,
+    automationRules,
+    automationRulesModalOpen,
     selectedConversation,
     selectedConversationId,
     selectedToolSchema,
@@ -626,21 +722,24 @@ export function useChatWorkspace(isMobile: boolean) {
     setComposer,
     setComposerMode,
     setDrawerOpen,
+    setEditingAutomationRule,
     setPruneKeepCount,
     setPruneModalOpen,
-    setStreamHeartbeatIntervalSeconds,
-    setStreamHeartbeatModalOpen,
-    setStreamHeartbeatText,
+    setAutomationRuleEditorOpen,
+    setAutomationRulesModalOpen,
     setToolCallId,
     setToolFormValues,
     setToolName,
-    streamHeartbeatIntervalSeconds,
-    streamHeartbeatModalOpen,
-    streamHeartbeatText,
+    editingAutomationRule,
+    savingAutomationRules,
     toolCallId,
     toolFormValues,
     toolName,
     visibleMessages,
-    handleSaveStreamHeartbeatConfig,
+    handleCreateAutomationRule,
+    handleDeleteAutomationRule,
+    handleEditAutomationRule,
+    handleSaveAutomationRule,
+    handleToggleAutomationRule,
   }
 }

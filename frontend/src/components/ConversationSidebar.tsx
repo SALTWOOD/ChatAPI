@@ -9,51 +9,65 @@ import {
   Modal,
   Popover,
   Space,
+  Switch,
+  Select,
   Tooltip,
   Typography,
 } from 'antd'
 import {
   DeleteOutlined,
+  EditOutlined,
   LeftOutlined,
   LogoutOutlined,
+  PlusOutlined,
   RightOutlined,
   SettingOutlined,
   StopOutlined,
 } from '@ant-design/icons'
 
 import { formatTime } from '../lib/chat-format'
-import type { AuthSession, Conversation } from '../types/chat'
+import type {
+  AuthSession,
+  AutomationRule,
+  AutomationRuleCondition,
+  Conversation,
+} from '../types/chat'
 
 type ConversationSidebarProps = {
   abortPopoverConversationId: string
   abortReason: string
   abortingConversationId: string
   auth: AuthSession
+  automationRuleEditorOpen: boolean
+  automationRules: AutomationRule[]
+  automationRulesModalOpen: boolean
   collapsed: boolean
   conversations: Conversation[]
   deletingConversationId: string
+  editingAutomationRule: AutomationRule | null
   onAbortConversation: (conversationId: string) => void | Promise<void>
+  onCreateAutomationRule: () => void | Promise<void>
+  onDeleteAutomationRule: (ruleId: string) => void | Promise<void>
   onDeleteConversation: (conversationId: string) => void | Promise<void>
+  onEditAutomationRule: (ruleId: string) => void | Promise<void>
   onLogout: () => void | Promise<void>
+  onPruneConversations: () => void | Promise<void>
+  onSaveAutomationRule: (rule: AutomationRule) => void | Promise<void>
   onSelectConversation: (conversationId: string) => void | Promise<void>
+  onToggleAutomationRule: (ruleId: string, enabled: boolean) => void | Promise<void>
   onToggleCollapsed: () => void
   pruneKeepCount: number
   pruneModalOpen: boolean
   pruningConversations: boolean
-  savingStreamHeartbeatConfig: boolean
+  savingAutomationRules: boolean
   selectedConversationId: string
   setAbortPopoverConversationId: (value: string) => void
   setAbortReason: (value: string) => void
+  setAutomationRuleEditorOpen: (value: boolean) => void
+  setAutomationRulesModalOpen: (value: boolean) => void
+  setEditingAutomationRule: (value: AutomationRule | null) => void
   setPruneKeepCount: (value: number) => void
   setPruneModalOpen: (value: boolean) => void
-  setStreamHeartbeatIntervalSeconds: (value: number) => void
-  setStreamHeartbeatModalOpen: (value: boolean) => void
-  setStreamHeartbeatText: (value: string) => void
-  streamHeartbeatIntervalSeconds: number
-  streamHeartbeatModalOpen: boolean
-  streamHeartbeatText: string
-  onPruneConversations: () => void | Promise<void>
-  onSaveStreamHeartbeatConfig: () => void | Promise<void>
 }
 
 export function ConversationSidebar({
@@ -61,32 +75,51 @@ export function ConversationSidebar({
   abortReason,
   abortingConversationId,
   auth,
+  automationRuleEditorOpen,
+  automationRules,
+  automationRulesModalOpen,
   collapsed,
   conversations,
   deletingConversationId,
+  editingAutomationRule,
   onAbortConversation,
+  onCreateAutomationRule,
+  onDeleteAutomationRule,
   onDeleteConversation,
+  onEditAutomationRule,
   onLogout,
   onPruneConversations,
-  onSaveStreamHeartbeatConfig,
+  onSaveAutomationRule,
   onSelectConversation,
+  onToggleAutomationRule,
   onToggleCollapsed,
   pruneKeepCount,
   pruneModalOpen,
   pruningConversations,
-  savingStreamHeartbeatConfig,
+  savingAutomationRules,
   selectedConversationId,
   setAbortPopoverConversationId,
   setAbortReason,
+  setAutomationRuleEditorOpen,
+  setAutomationRulesModalOpen,
+  setEditingAutomationRule,
   setPruneKeepCount,
   setPruneModalOpen,
-  setStreamHeartbeatIntervalSeconds,
-  setStreamHeartbeatModalOpen,
-  setStreamHeartbeatText,
-  streamHeartbeatIntervalSeconds,
-  streamHeartbeatModalOpen,
-  streamHeartbeatText,
 }: ConversationSidebarProps) {
+  function updateConditionList(
+    group: 'contains' | 'excludes',
+    updater: (items: AutomationRuleCondition[]) => AutomationRuleCondition[],
+  ) {
+    if (!editingAutomationRule) return
+    setEditingAutomationRule({
+      ...editingAutomationRule,
+      conditions: {
+        ...editingAutomationRule.conditions,
+        [group]: updater(editingAutomationRule.conditions[group]),
+      },
+    })
+  }
+
   return (
     <div className={`sidebar-inner ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-top">
@@ -248,12 +281,12 @@ export function ConversationSidebar({
           <>
             <div className="footer-head">
               <Typography.Text className="footer-name">{auth.user?.username}</Typography.Text>
-              <Tooltip title="流式保活设置">
+              <Tooltip title="自动化规则">
                 <Button
                   type="text"
                   icon={<SettingOutlined />}
                   className="footer-settings-button"
-                  onClick={() => setStreamHeartbeatModalOpen(true)}
+                  onClick={() => setAutomationRulesModalOpen(true)}
                 />
               </Tooltip>
             </div>
@@ -263,12 +296,12 @@ export function ConversationSidebar({
           </>
         ) : (
           <div className="sidebar-footer-collapsed">
-            <Tooltip title="流式保活设置">
+            <Tooltip title="自动化规则">
               <Button
                 type="text"
                 icon={<SettingOutlined />}
                 className="footer-settings-button"
-                onClick={() => setStreamHeartbeatModalOpen(true)}
+                onClick={() => setAutomationRulesModalOpen(true)}
               />
             </Tooltip>
             <Tooltip title="退出登录">
@@ -308,47 +341,381 @@ export function ConversationSidebar({
         </Space>
       </Modal>
       <Modal
-        title="流式保活设置"
-        open={streamHeartbeatModalOpen}
+        title="自动化规则"
+        width={860}
+        open={automationRulesModalOpen}
         onCancel={() => {
-          if (savingStreamHeartbeatConfig) return
-          setStreamHeartbeatModalOpen(false)
+          if (savingAutomationRules) return
+          setAutomationRulesModalOpen(false)
         }}
-        onOk={() => void onSaveStreamHeartbeatConfig()}
-        okText="保存"
-        okButtonProps={{ loading: savingStreamHeartbeatConfig }}
-        cancelButtonProps={{ disabled: savingStreamHeartbeatConfig }}
+        footer={null}
         destroyOnHidden
       >
-        <Space direction="vertical" size={12} className="prune-modal-stack">
-          <div>
-            <Typography.Text className="prune-input-label">初始回复字段</Typography.Text>
-            <Input.TextArea
-              value={streamHeartbeatText}
-              onChange={(event) => setStreamHeartbeatText(event.target.value)}
-              autoSize={{ minRows: 4, maxRows: 10 }}
-              placeholder="可输入空格、换行或零宽度空格"
-            />
-            <div className="stream-heartbeat-actions">
-              <Button
-                size="small"
-                onClick={() => setStreamHeartbeatText('\u200B')}
-              >
-                填入零宽度空格
-              </Button>
+        <div className="automation-rules-header">
+          <Typography.Text className="automation-rules-subtitle">
+            规则由条件、时间、动作三段组成。命中后会自动介入当前流式输出。
+          </Typography.Text>
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => void onCreateAutomationRule()}>
+            添加规则
+          </Button>
+        </div>
+        <List
+          className="automation-rule-list"
+          dataSource={automationRules}
+          locale={{ emptyText: <Empty description="还没有规则" /> }}
+          renderItem={(rule) => (
+            <List.Item className="automation-rule-item">
+              <div className="automation-rule-copy">
+                <Typography.Text className="automation-rule-title">
+                  {rule.id}
+                </Typography.Text>
+                <Typography.Paragraph className="automation-rule-summary">
+                  {`包含 ${rule.conditions.contains.length} 项，不包含 ${rule.conditions.excludes.length} 项，延时 ${rule.timing.delay_seconds} 秒，重复 ${rule.timing.repeat_interval_seconds} 秒，动作 ${rule.action.type}`}
+                </Typography.Paragraph>
+              </div>
+              <Space size={10}>
+                <Switch
+                  checked={rule.enabled}
+                  checkedChildren="启用"
+                  unCheckedChildren="停用"
+                  loading={savingAutomationRules}
+                  onChange={(checked) => void onToggleAutomationRule(rule.id, checked)}
+                />
+                <Button icon={<EditOutlined />} onClick={() => void onEditAutomationRule(rule.id)}>
+                  编辑
+                </Button>
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  loading={savingAutomationRules}
+                  onClick={() => void onDeleteAutomationRule(rule.id)}
+                >
+                  删除
+                </Button>
+              </Space>
+            </List.Item>
+          )}
+        />
+      </Modal>
+      <Modal
+        title={editingAutomationRule ? `编辑规则 ${editingAutomationRule.id}` : '编辑规则'}
+        width={980}
+        open={automationRuleEditorOpen}
+        onCancel={() => {
+          if (savingAutomationRules) return
+          setAutomationRuleEditorOpen(false)
+          setEditingAutomationRule(null)
+        }}
+        onOk={() => {
+          if (!editingAutomationRule) return
+          void onSaveAutomationRule(editingAutomationRule)
+        }}
+        okText="保存规则"
+        okButtonProps={{ loading: savingAutomationRules }}
+        cancelButtonProps={{ disabled: savingAutomationRules }}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={18} className="automation-editor-stack">
+          <div className="automation-editor-section">
+            <Typography.Title level={5} className="automation-editor-title">
+              条件
+            </Typography.Title>
+            <div className="automation-editor-grid">
+              <div>
+                <Typography.Text className="prune-input-label">请求中包含字符串</Typography.Text>
+                <div className="automation-condition-list">
+                  {(editingAutomationRule?.conditions.contains ?? []).map((item, index) => (
+                    <div className="automation-condition-row" key={`contains-${index}`}>
+                      <Select
+                        value={item.match_type}
+                        options={[
+                          { value: 'substring', label: '普通文本' },
+                          { value: 'regex', label: '正则' },
+                        ]}
+                        onChange={(value) =>
+                          updateConditionList('contains', (items) =>
+                            items.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? {
+                                    ...entry,
+                                    match_type: value as AutomationRuleCondition['match_type'],
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                        className="automation-condition-type"
+                      />
+                      <Input
+                        value={item.pattern}
+                        onChange={(event) =>
+                          updateConditionList('contains', (items) =>
+                            items.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? {
+                                    ...entry,
+                                    pattern: event.target.value,
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                        placeholder={
+                          item.match_type === 'regex'
+                            ? '示例：weather|forecast 或 ^帮我.*查天气$'
+                            : '示例：天气 或 帮我查一下'
+                        }
+                      />
+                      <Button
+                        danger
+                        onClick={() =>
+                          updateConditionList('contains', (items) =>
+                            items.filter((_, entryIndex) => entryIndex !== index),
+                          )
+                        }
+                      >
+                        删除
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    onClick={() =>
+                      updateConditionList('contains', (items) => [
+                        ...items,
+                        { match_type: 'substring', pattern: '' },
+                      ])
+                    }
+                  >
+                    添加包含条件
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <Typography.Text className="prune-input-label">请求中不包含字符串</Typography.Text>
+                <div className="automation-condition-list">
+                  {(editingAutomationRule?.conditions.excludes ?? []).map((item, index) => (
+                    <div className="automation-condition-row" key={`excludes-${index}`}>
+                      <Select
+                        value={item.match_type}
+                        options={[
+                          { value: 'substring', label: '普通文本' },
+                          { value: 'regex', label: '正则' },
+                        ]}
+                        onChange={(value) =>
+                          updateConditionList('excludes', (items) =>
+                            items.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? {
+                                    ...entry,
+                                    match_type: value as AutomationRuleCondition['match_type'],
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                        className="automation-condition-type"
+                      />
+                      <Input
+                        value={item.pattern}
+                        onChange={(event) =>
+                          updateConditionList('excludes', (items) =>
+                            items.map((entry, entryIndex) =>
+                              entryIndex === index
+                                ? {
+                                    ...entry,
+                                    pattern: event.target.value,
+                                  }
+                                : entry,
+                            ),
+                          )
+                        }
+                        placeholder={
+                          item.match_type === 'regex'
+                            ? '示例：上海|北京 或 ^debug:'
+                            : '示例：上海 或 不要联网'
+                        }
+                      />
+                      <Button
+                        danger
+                        onClick={() =>
+                          updateConditionList('excludes', (items) =>
+                            items.filter((_, entryIndex) => entryIndex !== index),
+                          )
+                        }
+                      >
+                        删除
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    onClick={() =>
+                      updateConditionList('excludes', (items) => [
+                        ...items,
+                        { match_type: 'substring', pattern: '' },
+                      ])
+                    }
+                  >
+                    添加排除条件
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
-          <div>
-            <Typography.Text className="prune-input-label">间隔时间（秒）</Typography.Text>
-            <InputNumber
-              min={0}
-              value={streamHeartbeatIntervalSeconds}
-              onChange={(value) =>
-                setStreamHeartbeatIntervalSeconds(typeof value === 'number' ? value : 0)
-              }
-              className="prune-input"
-              placeholder="输入秒数，0 表示关闭"
-            />
+          <div className="automation-editor-section">
+            <Typography.Title level={5} className="automation-editor-title">
+              时间
+            </Typography.Title>
+            <div className="automation-editor-grid">
+              <div>
+                <Typography.Text className="prune-input-label">收到后延时（秒）</Typography.Text>
+                <InputNumber
+                  min={0}
+                  value={editingAutomationRule?.timing.delay_seconds ?? 0}
+                  onChange={(value) => {
+                    if (!editingAutomationRule) return
+                    setEditingAutomationRule({
+                      ...editingAutomationRule,
+                      timing: {
+                        ...editingAutomationRule.timing,
+                        delay_seconds: typeof value === 'number' ? value : 0,
+                      },
+                    })
+                  }}
+                  className="prune-input"
+                />
+              </div>
+              <div>
+                <Typography.Text className="prune-input-label">每隔时间重复（秒）</Typography.Text>
+                <InputNumber
+                  min={0}
+                  value={editingAutomationRule?.timing.repeat_interval_seconds ?? 0}
+                  onChange={(value) => {
+                    if (!editingAutomationRule) return
+                    setEditingAutomationRule({
+                      ...editingAutomationRule,
+                      timing: {
+                        ...editingAutomationRule.timing,
+                        repeat_interval_seconds: typeof value === 'number' ? value : 0,
+                      },
+                    })
+                  }}
+                  className="prune-input"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="automation-editor-section">
+            <Typography.Title level={5} className="automation-editor-title">
+              动作
+            </Typography.Title>
+            <div className="automation-action-type-group">
+              <Button
+                type={editingAutomationRule?.action.type === 'output_text' ? 'primary' : 'default'}
+                onClick={() => {
+                  if (!editingAutomationRule) return
+                  setEditingAutomationRule({
+                    ...editingAutomationRule,
+                    action: {
+                      ...editingAutomationRule.action,
+                      type: 'output_text',
+                    },
+                  })
+                }}
+              >
+                输出指定文本
+              </Button>
+              <Button
+                type={editingAutomationRule?.action.type === 'complete' ? 'primary' : 'default'}
+                onClick={() => {
+                  if (!editingAutomationRule) return
+                  setEditingAutomationRule({
+                    ...editingAutomationRule,
+                    action: {
+                      ...editingAutomationRule.action,
+                      type: 'complete',
+                    },
+                  })
+                }}
+              >
+                结束输出
+              </Button>
+              <Button
+                danger={editingAutomationRule?.action.type === 'error'}
+                type={editingAutomationRule?.action.type === 'error' ? 'primary' : 'default'}
+                onClick={() => {
+                  if (!editingAutomationRule) return
+                  setEditingAutomationRule({
+                    ...editingAutomationRule,
+                    action: {
+                      ...editingAutomationRule.action,
+                      type: 'error',
+                    },
+                  })
+                }}
+              >
+                返回 error
+              </Button>
+            </div>
+            {editingAutomationRule?.action.type === 'output_text' ? (
+              <div className="automation-editor-action-field">
+                <Typography.Text className="prune-input-label">输出文本</Typography.Text>
+                <Input.TextArea
+                  value={editingAutomationRule.action.text}
+                  onChange={(event) => {
+                    if (!editingAutomationRule) return
+                    setEditingAutomationRule({
+                      ...editingAutomationRule,
+                      action: {
+                        ...editingAutomationRule.action,
+                        text: event.target.value,
+                      },
+                    })
+                  }}
+                  autoSize={{ minRows: 5, maxRows: 12 }}
+                  placeholder="命中规则后输出的文本"
+                />
+              </div>
+            ) : null}
+            {editingAutomationRule?.action.type === 'complete' ? (
+              <div className="automation-editor-action-field">
+                <Typography.Text className="prune-input-label">结束时补充文本</Typography.Text>
+                <Input.TextArea
+                  value={editingAutomationRule.action.text}
+                  onChange={(event) => {
+                    if (!editingAutomationRule) return
+                    setEditingAutomationRule({
+                      ...editingAutomationRule,
+                      action: {
+                        ...editingAutomationRule.action,
+                        text: event.target.value,
+                      },
+                    })
+                  }}
+                  autoSize={{ minRows: 4, maxRows: 10 }}
+                  placeholder="可留空；留空时直接以当前草稿结束"
+                />
+              </div>
+            ) : null}
+            {editingAutomationRule?.action.type === 'error' ? (
+              <div className="automation-editor-action-field">
+                <Typography.Text className="prune-input-label">错误信息</Typography.Text>
+                <Input.TextArea
+                  value={editingAutomationRule.action.error_message}
+                  onChange={(event) => {
+                    if (!editingAutomationRule) return
+                    setEditingAutomationRule({
+                      ...editingAutomationRule,
+                      action: {
+                        ...editingAutomationRule.action,
+                        error_message: event.target.value,
+                      },
+                    })
+                  }}
+                  autoSize={{ minRows: 4, maxRows: 10 }}
+                  placeholder="命中规则后直接返回给请求方的错误信息"
+                />
+              </div>
+            ) : null}
           </div>
         </Space>
       </Modal>

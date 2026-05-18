@@ -92,7 +92,25 @@ export type LoginFormValues = {
   password: string
 }
 
-export type StreamHeartbeatConfig = {
-  heartbeat_text: string
-  heartbeat_interval_seconds: number
+export type AutomationRuleCondition = {
+  match_type: 'substring' | 'regex'
+  pattern: string
+}
+
+export type AutomationRule = {
+  id: string
+  enabled: boolean
+  conditions: {
+    contains: AutomationRuleCondition[]
+    excludes: AutomationRuleCondition[]
+  }
+  timing: {
+    delay_seconds: number
+    repeat_interval_seconds: number
+  }
+  action: {
+    type: 'output_text' | 'complete' | 'error'
+    text: string
+    error_message: string
+  }
 }

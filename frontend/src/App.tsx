@@ -88,31 +88,36 @@ function App() {
       abortReason={workspace.abortReason}
       abortingConversationId={workspace.abortingConversationId}
       auth={workspace.auth}
+      automationRuleEditorOpen={workspace.automationRuleEditorOpen}
+      automationRules={workspace.automationRules}
+      automationRulesModalOpen={workspace.automationRulesModalOpen}
       collapsed={!isMobile && sidebarCollapsed}
       conversations={workspace.conversations}
       deletingConversationId={workspace.deletingConversationId}
+      editingAutomationRule={workspace.editingAutomationRule}
       onAbortConversation={workspace.handleAbortConversation}
+      onCreateAutomationRule={workspace.handleCreateAutomationRule}
+      onDeleteAutomationRule={workspace.handleDeleteAutomationRule}
       onDeleteConversation={workspace.handleDeleteConversation}
+      onEditAutomationRule={workspace.handleEditAutomationRule}
       onLogout={workspace.handleLogout}
       onPruneConversations={workspace.handlePruneConversations}
+      onSaveAutomationRule={workspace.handleSaveAutomationRule}
       onSelectConversation={workspace.handleSelectConversation}
+      onToggleAutomationRule={workspace.handleToggleAutomationRule}
       onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       pruneKeepCount={workspace.pruneKeepCount}
       pruneModalOpen={workspace.pruneModalOpen}
       pruningConversations={workspace.pruningConversations}
-      savingStreamHeartbeatConfig={workspace.savingStreamHeartbeatConfig}
+      savingAutomationRules={workspace.savingAutomationRules}
       selectedConversationId={workspace.selectedConversationId}
       setAbortPopoverConversationId={workspace.setAbortPopoverConversationId}
       setAbortReason={workspace.setAbortReason}
+      setAutomationRuleEditorOpen={workspace.setAutomationRuleEditorOpen}
+      setAutomationRulesModalOpen={workspace.setAutomationRulesModalOpen}
+      setEditingAutomationRule={workspace.setEditingAutomationRule}
       setPruneKeepCount={workspace.setPruneKeepCount}
       setPruneModalOpen={workspace.setPruneModalOpen}
-      setStreamHeartbeatIntervalSeconds={workspace.setStreamHeartbeatIntervalSeconds}
-      setStreamHeartbeatModalOpen={workspace.setStreamHeartbeatModalOpen}
-      setStreamHeartbeatText={workspace.setStreamHeartbeatText}
-      streamHeartbeatIntervalSeconds={workspace.streamHeartbeatIntervalSeconds}
-      streamHeartbeatModalOpen={workspace.streamHeartbeatModalOpen}
-      streamHeartbeatText={workspace.streamHeartbeatText}
-      onSaveStreamHeartbeatConfig={workspace.handleSaveStreamHeartbeatConfig}
     />
   )
 
