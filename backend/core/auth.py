@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import struct
+import time
 from functools import wraps
 from typing import Any, Callable
 
@@ -49,3 +55,46 @@ class AuthContext:
             "origin": str(request.headers.get("Origin", "")).strip(),
             "referer": str(request.headers.get("Referer", "")).strip(),
         }
+
+
+def _normalize_totp_secret(secret: str) -> bytes:
+    normalized = "".join(secret.split()).upper()
+    if not normalized:
+        return b""
+    padding = "=" * ((8 - len(normalized) % 8) % 8)
+    try:
+        return base64.b32decode(f"{normalized}{padding}", casefold=True)
+    except (binascii.Error, ValueError):
+        return secret.encode("utf-8")
+
+
+def _totp_code(secret: bytes, counter: int, digits: int = 6) -> str:
+    digest = hmac.new(secret, struct.pack(">Q", counter), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    binary = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return str(binary % (10**digits)).zfill(digits)
+
+
+def verify_totp_code(
+    secret: str,
+    code: str,
+    *,
+    for_time: int | None = None,
+    step: int = 30,
+    window: int = 1,
+    digits: int = 6,
+) -> bool:
+    secret_bytes = _normalize_totp_secret(secret)
+    if not secret_bytes:
+        return False
+
+    candidate = "".join(str(code).split())
+    if not candidate.isdigit() or len(candidate) != digits:
+        return False
+
+    now = int(time.time() if for_time is None else for_time)
+    counter = now // step
+    for drift in range(-window, window + 1):
+        if hmac.compare_digest(_totp_code(secret_bytes, counter + drift, digits=digits), candidate):
+            return True
+    return False

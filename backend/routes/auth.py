@@ -3,6 +3,7 @@ from __future__ import annotations
 from flask import Flask, jsonify, request, session
 
 from ..core import AuthContext, Settings
+from ..core.auth import verify_totp_code
 
 
 def register_auth_routes(app: Flask, *, auth: AuthContext, settings: Settings) -> None:
@@ -11,8 +12,11 @@ def register_auth_routes(app: Flask, *, auth: AuthContext, settings: Settings) -
         data = request.get_json(silent=True) or {}
         username = str(data.get("username", "")).strip()
         password = str(data.get("password", ""))
+        totp = str(data.get("totp", "")).strip()
         if username != settings.username or password != settings.password:
             return jsonify({"error": "账号或密码不正确"}), 401
+        if settings.totp_secret and not verify_totp_code(settings.totp_secret, totp):
+            return jsonify({"error": "验证码不正确"}), 401
         session["username"] = username
         return {"ok": True, "user": {"username": username}}
 
@@ -24,4 +28,8 @@ def register_auth_routes(app: Flask, *, auth: AuthContext, settings: Settings) -
     @app.get("/api/auth/session")
     def auth_session():
         user = auth.current_user()
-        return {"authenticated": bool(user), "user": user}
+        return {
+            "authenticated": bool(user),
+            "user": user,
+            "totp_enabled": bool(settings.totp_secret.strip()),
+        }

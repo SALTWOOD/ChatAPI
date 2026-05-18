@@ -1,0 +1,67 @@
+import { useEffect, useState } from 'react'
+
+import { requestJson } from '../lib/api'
+import type { AuthSession, AuthUser, LoginFormValues } from '../types/chat'
+
+const DEFAULT_SESSION: AuthSession = {
+  authenticated: false,
+  user: null,
+  totp_enabled: false,
+}
+
+export function useAuthSession() {
+  const [session, setSession] = useState<AuthSession>(DEFAULT_SESSION)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+
+    async function loadSession() {
+      try {
+        const nextSession = await requestJson<AuthSession>('/api/auth/session')
+        if (!active) return
+        setSession(nextSession)
+      } catch {
+        if (!active) return
+        setSession(DEFAULT_SESSION)
+      } finally {
+        if (active) {
+          setLoading(false)
+        }
+      }
+    }
+
+    void loadSession()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  async function refreshSession() {
+    const nextSession = await requestJson<AuthSession>('/api/auth/session')
+    setSession(nextSession)
+    return nextSession
+  }
+
+  async function login(values: LoginFormValues) {
+    await requestJson<{ ok: boolean; user: AuthUser }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(values),
+    })
+    return refreshSession()
+  }
+
+  async function logout() {
+    await requestJson('/api/auth/logout', { method: 'POST' })
+    setSession(DEFAULT_SESSION)
+  }
+
+  return {
+    loading,
+    login,
+    logout,
+    refreshSession,
+    session,
+  }
+}

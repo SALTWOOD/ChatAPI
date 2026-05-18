@@ -5,6 +5,7 @@ export type AuthUser = {
 export type AuthSession = {
   authenticated: boolean
   user: AuthUser | null
+  totp_enabled: boolean
 }
 
 export type Conversation = {
@@ -90,6 +91,7 @@ export type VisibleMessage = MessageItem & { draft?: boolean }
 export type LoginFormValues = {
   username: string
   password: string
+  totp?: string
 }
 
 export type AutomationRuleCondition = {
@@ -124,6 +126,10 @@ export type StatisticsSummary = {
   output_tokens: number
   start_at?: string | null
   end_at?: string | null
+}
+
+export type SystemConfig = {
+  public_statistics: boolean
 }
 
 export type WorkspaceSnapshotEvent = {

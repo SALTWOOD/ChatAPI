@@ -9,9 +9,10 @@
 
 默认提供：
 
-- 基于 `.env` 的用户名密码登录
-- Responses 风格接口 `POST /v1/responses`（暂不支持/chat/completions）
+- 基于 `.env` 的用户名密码登录，支持可选 TOTP
+- 支持/chat/completions、/responses、/messages 三套接口
 - 会话列表与消息持久化能力，便于调试和查看上下文
+- 自动化回复输出能力，支持定时流式发送、循环输出，条件判断自动回复等场景
 - 可选 ntfy 消息推送
 
 ## 1. 部署
@@ -70,6 +71,9 @@ CHATAPI_MESSAGES_PER_MINUTE_LIMIT=0
 # 直接由 Flask 提供 HTTPS 时使用
 # CHATAPI_TLS_CERT_FILE=./certs/server.crt
 # CHATAPI_TLS_KEY_FILE=./certs/server.key
+
+# 可选 TOTP 密钥；配置后登录页面会要求输入 6 位验证码
+# CHATAPI_TOTP_SECRET=JBSWY3DPEHPK3PXP
 ```
 
 ## 4. Nginx 反向代理示例

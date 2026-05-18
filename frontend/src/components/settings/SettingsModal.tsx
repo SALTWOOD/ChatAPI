@@ -4,6 +4,7 @@ import { Modal, Tabs } from 'antd'
 import type { AutomationRule } from '../../types/chat'
 import { AutomationRulesPanel } from './AutomationRulesPanel'
 import { StatisticsPanel } from './StatisticsPanel'
+import { SystemSettingsPanel } from './SystemSettingsPanel'
 
 type SettingsModalProps = {
   automationRuleEditorOpen: boolean
@@ -28,7 +29,7 @@ export function SettingsModal({
   onClose,
   savingAutomationRules,
 }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<'statistics' | 'automation'>('statistics')
+  const [activeTab, setActiveTab] = useState<'statistics' | 'system' | 'automation'>('statistics')
 
   useEffect(() => {
     if (open) {
@@ -51,12 +52,17 @@ export function SettingsModal({
     >
       <Tabs
         activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as 'statistics' | 'automation')}
+        onChange={(key) => setActiveTab(key as 'statistics' | 'system' | 'automation')}
         items={[
           {
             key: 'statistics',
             label: '统计面板',
             children: <StatisticsPanel open={open && activeTab === 'statistics'} />,
+          },
+          {
+            key: 'system',
+            label: '系统设置',
+            children: <SystemSettingsPanel open={open && activeTab === 'system'} />,
           },
           {
             key: 'automation',

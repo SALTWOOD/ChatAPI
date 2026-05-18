@@ -58,6 +58,7 @@ class Settings:
     username: str
     password: str
     session_secret: str
+    totp_secret: str
     api_key: str
     db_path: Path
     cors_origins: list[str]
@@ -110,6 +111,7 @@ class Settings:
                 "ADMIN_SESSION_SECRET",
                 default="change-this-session-secret",
             ),
+            totp_secret=_first_non_empty("CHATAPI_TOTP_SECRET", "ADMIN_TOTP_SECRET", default=""),
             api_key=_first_non_empty("CHATAPI_API_KEY", default=""),
             db_path=db_path,
             cors_origins=_split_csv(cors_raw),

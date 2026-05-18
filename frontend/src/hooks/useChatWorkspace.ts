@@ -30,6 +30,7 @@ export function useChatWorkspace(isMobile: boolean) {
   const [auth, setAuth] = useState<AuthSession>({
     authenticated: false,
     user: null,
+    totp_enabled: false,
   })
   const [loginLoading, setLoginLoading] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -349,7 +350,7 @@ export function useChatWorkspace(isMobile: boolean) {
     }
   }, [])
 
-  async function handleLogin(values: { username: string; password: string }) {
+  async function handleLogin(values: { username: string; password: string; totp?: string }) {
     setLoginLoading(true)
     try {
       await requestJson<{ ok: boolean; user: AuthUser }>('/api/auth/login', {
@@ -371,7 +372,7 @@ export function useChatWorkspace(isMobile: boolean) {
     try {
       await requestJson('/api/auth/logout', { method: 'POST' })
     } finally {
-      setAuth({ authenticated: false, user: null })
+      setAuth({ authenticated: false, user: null, totp_enabled: false })
       setConversations([])
       setSelectedConversationId('')
       setMessagesByConversation({})
@@ -670,20 +671,21 @@ export function useChatWorkspace(isMobile: boolean) {
     successMessage?: string
   }) {
     if (!isWaitingForUser) return
-    let finalText = ''
+    const finalText =
+      composerMode === 'assistant_message'
+        ? `${draftBuffer}${composer}`.trim()
+        : (() => {
+            try {
+              return buildToolCallPayload()
+            } catch (error) {
+              message.error(error instanceof Error ? error.message : '工具参数格式错误')
+              return ''
+            }
+          })()
 
-    if (composerMode === 'assistant_message') {
-      finalText = `${draftBuffer}${composer}`.trim()
-    } else {
-      try {
-        finalText = buildToolCallPayload()
-      } catch (error) {
-        message.error(error instanceof Error ? error.message : '工具参数格式错误')
-        return
-      }
+    if (!finalText) {
+      return
     }
-
-    if (!finalText) return
 
     setSending(true)
     try {

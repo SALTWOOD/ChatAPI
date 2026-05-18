@@ -89,7 +89,13 @@ export function StatisticsPanel({ open }: StatisticsPanelProps) {
         setSummary(data.summary)
       } catch (error_) {
         if (!active) return
-        setError(error_ instanceof Error ? error_.message : '统计加载失败')
+        const message =
+          error_ instanceof Error && error_.message === 'unauthorized'
+            ? '统计未公开，请登录后查看。'
+            : error_ instanceof Error
+              ? error_.message
+              : '统计加载失败'
+        setError(message)
       } finally {
         if (active) {
           setLoading(false)

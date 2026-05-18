@@ -12,9 +12,12 @@ from ..services.response_stream import (
 )
 from ..services.turn_coordinator import PreparedTurn, TurnCoordinator
 
+SYSTEM_PUBLIC_STATISTICS_CONFIG_KEY = "system.public_statistics"
+
 
 def register_response_routes(app: Flask, *, deps: AppDependencies) -> None:
     auth = deps.auth
+    store = deps.store
     realtime = app.extensions.get("chat_realtime")
 
     def publish_sync(owner_id: str, conversation_id: str | None = None) -> None:
@@ -161,3 +164,28 @@ def register_response_routes(app: Flask, *, deps: AppDependencies) -> None:
         except ValueError as error:
             return {"error": str(error)}, 400
         return {"ok": True, "rules": normalized}
+
+    @app.get("/api/config/system")
+    @auth.require_auth
+    def get_system_config():
+        return {
+            "ok": True,
+            "public_statistics": store.get_config(SYSTEM_PUBLIC_STATISTICS_CONFIG_KEY, "0") == "1",
+        }
+
+    @app.post("/api/config/system")
+    @auth.require_auth
+    def update_system_config():
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return {"error": "request body must be a JSON object"}, 400
+
+        public_statistics = bool(data.get("public_statistics"))
+        store.set_config(
+            SYSTEM_PUBLIC_STATISTICS_CONFIG_KEY,
+            "1" if public_statistics else "0",
+        )
+        return {
+            "ok": True,
+            "public_statistics": public_statistics,
+        }

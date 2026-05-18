@@ -1,4 +1,4 @@
-import type { KeyboardEvent, UIEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type UIEvent } from 'react'
 
 import {
   Avatar,
@@ -17,6 +17,7 @@ import {
 import { LogoutOutlined, MenuOutlined, SaveOutlined, SendOutlined, UserOutlined } from '@ant-design/icons'
 
 import { formatJson, formatTime, getSchemaType, renderMessageContent } from '../lib/chat-format'
+import { ThemeToggle } from './ThemeToggle'
 import type {
   ComposerMode,
   JsonSchema,
@@ -188,11 +189,81 @@ export function ChatPane(props: ChatPaneProps) {
     toolName,
     visibleMessages,
   } = props
+  const composerCardRef = useRef<HTMLDivElement | null>(null)
+  const [composerHeight, setComposerHeight] = useState(0)
+  const [visualViewportRect, setVisualViewportRect] = useState(() => ({
+    bottomInset: 0,
+    height: typeof window === 'undefined' ? 0 : window.innerHeight,
+    offsetTop: 0,
+  }))
+
+  useEffect(() => {
+    const element = composerCardRef.current
+    if (!element) return
+
+    const updateComposerHeight = () => {
+      setComposerHeight(Math.ceil(element.getBoundingClientRect().height))
+    }
+
+    updateComposerHeight()
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateComposerHeight)
+      return () => window.removeEventListener('resize', updateComposerHeight)
+    }
+
+    const observer = new ResizeObserver(updateComposerHeight)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const updateVisualViewportRect = () => {
+      const viewport = window.visualViewport
+      const height = Math.round(viewport?.height ?? window.innerHeight)
+      const offsetTop = Math.round(viewport?.offsetTop ?? 0)
+      const bottomInset = Math.max(0, Math.round(window.innerHeight - height - offsetTop))
+      setVisualViewportRect({
+        bottomInset,
+        height,
+        offsetTop,
+      })
+    }
+
+    updateVisualViewportRect()
+
+    const viewport = window.visualViewport
+    window.addEventListener('resize', updateVisualViewportRect)
+    viewport?.addEventListener('resize', updateVisualViewportRect)
+    viewport?.addEventListener('scroll', updateVisualViewportRect)
+
+    return () => {
+      window.removeEventListener('resize', updateVisualViewportRect)
+      viewport?.removeEventListener('resize', updateVisualViewportRect)
+      viewport?.removeEventListener('scroll', updateVisualViewportRect)
+    }
+  }, [])
+
+  const paneStyle = {
+    '--composer-height': `${composerHeight}px`,
+    '--keyboard-offset': `${keyboardOffset}px`,
+    '--app-viewport-height': `${visualViewportRect.height}px`,
+    '--visual-keyboard-offset': `${visualViewportRect.bottomInset}px`,
+    '--visual-viewport-height': `${visualViewportRect.height}px`,
+  } as CSSProperties
+  const composerStyle = {
+    bottom: isMobile ? `${visualViewportRect.bottomInset}px` : 0,
+    maxHeight: isMobile
+      ? `calc(${visualViewportRect.height}px - env(safe-area-inset-top) - 8px)`
+      : undefined,
+  } as CSSProperties
 
   const toolFields = Object.entries(selectedToolSchema?.parameters.properties ?? {})
 
   return (
-    <div className="chat-pane">
+    <div className="chat-pane" style={paneStyle}>
       <div className="chat-topbar">
         <Space align="center" size={12}>
           {isMobile && (
@@ -206,6 +277,7 @@ export function ChatPane(props: ChatPaneProps) {
           </div>
         </Space>
         <Space>
+          <ThemeToggle className="workspace-theme-toggle" />
           {!isMobile && (
             <Button icon={<LogoutOutlined />} onClick={() => void onLogout()}>
               退出
@@ -371,7 +443,7 @@ export function ChatPane(props: ChatPaneProps) {
         <div ref={bottomRef} />
       </div>
 
-      <Card className="composer-card" style={{ bottom: keyboardOffset }}>
+      <Card ref={composerCardRef} className="composer-card" style={composerStyle}>
         <div className="composer-shell">
           <Space direction="vertical" size={12} className="composer-stack">
             {draftBuffer && (
