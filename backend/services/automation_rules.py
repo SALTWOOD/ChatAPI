@@ -315,7 +315,6 @@ class AutomationRuleEngine:
                     self._output_controller.complete_assistant_message(
                         conversation_id=conversation_id,
                         owner_id=owner_id,
-                        text=rule.action_text,
                         provider="rule",
                     )
                     return

@@ -119,8 +119,14 @@ export function normalizeToolFieldValue(value: unknown, schema?: JsonSchema) {
   return typeof value === 'string' ? value : String(value)
 }
 
-function isBase64DataImageUrl(value: string): boolean {
-  return /^data:image\/[a-zA-Z0-9.+-]+;base64,/i.test(value.trim())
+function isHostedImageUrl(value: string): boolean {
+  return /^(?:https?:\/\/[^/]+)?\/api\/uploads\/imgs\/[A-Za-z0-9._-]+(?:\?.*)?$/i.test(
+    value.trim(),
+  )
+}
+
+function isRenderableImageUrl(value: string): boolean {
+  return isHostedImageUrl(value)
 }
 
 function tryParseStructuredContent(rawContent: string): unknown {
@@ -128,7 +134,7 @@ function tryParseStructuredContent(rawContent: string): unknown {
     return JSON.parse(rawContent)
   } catch {
     // Some mock payloads use Python repr style:
-    // [{'type': 'input_image', 'image_url': 'data:image/png;base64,...'}]
+    // [{'type': 'input_image', 'image_url': '/api/uploads/imgs/...'}]
   }
 
   const trimmed = rawContent.trim()
@@ -177,48 +183,100 @@ function tryParseStructuredContent(rawContent: string): unknown {
 
 function parseRenderableContent(rawContent: string): RenderableContentPart[] {
   const fallback = rawContent.trim()
-    ? [{ type: 'text', text: normalizeDisplayText(rawContent) } satisfies RenderableContentPart]
+    ? isRenderableImageUrl(rawContent.trim())
+      ? [{ type: 'image', src: rawContent.trim() } satisfies RenderableContentPart]
+      : [{ type: 'text', text: normalizeDisplayText(rawContent) } satisfies RenderableContentPart]
     : []
 
   const parsed = tryParseStructuredContent(rawContent)
 
-  if (!Array.isArray(parsed)) return fallback
-
   const parts: RenderableContentPart[] = []
-  for (const item of parsed) {
-    if (!item || typeof item !== 'object') continue
-    const record = item as Record<string, unknown>
-    const itemType = String(record.type ?? '').trim()
-    if (
-      itemType === 'input_image' &&
-      typeof record.image_url === 'string' &&
-      isBase64DataImageUrl(record.image_url)
-    ) {
+
+  const visit = (value: unknown): void => {
+    if (value == null) return
+    if (typeof value === 'string') {
+      if (isRenderableImageUrl(value)) {
+        parts.push({ type: 'image', src: value.trim() })
+      } else if (value.trim()) {
+        parts.push({ type: 'text', text: normalizeDisplayText(value) })
+      }
+      return
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item)
+      return
+    }
+    if (typeof value !== 'object') return
+
+    const record = value as Record<string, unknown>
+    const itemType = String(record.type ?? '').trim().toLowerCase()
+    const imageCandidate =
+      typeof record.image_url === 'string'
+        ? record.image_url
+        : typeof record.url === 'string'
+          ? record.url
+          : typeof record.src === 'string'
+            ? record.src
+            : typeof record.data === 'string' && isRenderableImageUrl(record.data)
+              ? record.data
+              : ''
+
+    if (imageCandidate && isRenderableImageUrl(imageCandidate)) {
       parts.push({
         type: 'image',
-        src: record.image_url,
+        src: imageCandidate.trim(),
         detail:
           typeof record.detail === 'string' && record.detail.trim()
             ? record.detail.trim()
             : undefined,
       })
-      continue
+      return
     }
+
     if (
+      (itemType === 'input_image' ||
+        itemType === 'output_image' ||
+        itemType === 'image' ||
+        (itemType === 'file' && typeof record.image_url === 'string')) &&
+      typeof record.image_url === 'string' &&
+      isRenderableImageUrl(record.image_url)
+    ) {
+      parts.push({
+        type: 'image',
+        src: record.image_url.trim(),
+        detail:
+          typeof record.detail === 'string' && record.detail.trim()
+            ? record.detail.trim()
+            : undefined,
+      })
+      return
+    }
+
+    if (
+      typeof record.text === 'string' &&
+      record.text.trim() &&
       (itemType === 'input_text' ||
         itemType === 'output_text' ||
-        itemType === 'text') &&
-      typeof record.text === 'string' &&
-      record.text.trim()
+        itemType === 'text' ||
+        !itemType)
     ) {
       parts.push({ type: 'text', text: normalizeDisplayText(record.text) })
-      continue
+      return
     }
-    if (!itemType && typeof record.text === 'string' && record.text.trim()) {
-      parts.push({ type: 'text', text: normalizeDisplayText(record.text) })
+
+    if (typeof record.content === 'string' && record.content.trim()) {
+      visit(record.content)
+      return
+    }
+
+    for (const [childKey, childValue] of Object.entries(record)) {
+      if (childKey === 'type') continue
+      visit(childValue)
     }
   }
 
+  if (parsed == null) return fallback
+  visit(parsed)
   return parts.length > 0 ? parts : fallback
 }
 

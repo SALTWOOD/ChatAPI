@@ -12,6 +12,7 @@ def register_conversation_routes(app: Flask, *, deps: AppDependencies) -> None:
     auth = deps.auth
     store = deps.store
     pending_turns = deps.pending_turns
+    image_store = deps.image_store
     realtime = app.extensions.get("chat_realtime")
 
     def publish_sync(owner_id: str, conversation_id: str | None = None) -> None:
@@ -94,6 +95,7 @@ def register_conversation_routes(app: Flask, *, deps: AppDependencies) -> None:
             store.delete_conversation(conversation_id, owner)
         except ValueError:
             return jsonify({"error": "conversation not found"}), 404
+        image_store.cleanup_orphans(store.iter_messages())
         publish_delete(owner, conversation_id)
         return {"ok": True}
 
@@ -113,6 +115,7 @@ def register_conversation_routes(app: Flask, *, deps: AppDependencies) -> None:
             auth.owner_id(),
             keep_count,
         )
+        image_store.cleanup_orphans(store.iter_messages())
         for conversation_id in deleted_ids:
             publish_delete(auth.owner_id(), conversation_id)
         return {

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
 from ..core.auth import AuthContext
 from ..repositories import ConversationStore
+
+
+_IMAGE_URL_RE = re.compile(r"^(?:https?://[^\s\"']+)?/api/uploads/imgs/[A-Za-z0-9._-]+(?:\?.*)?$", re.IGNORECASE)
 
 
 def normalize_message_text(value: str) -> str:
@@ -53,6 +57,16 @@ def request_input_payload(data: dict[str, Any], request_format: str) -> Any:
     return response_input_payload(data)
 
 
+def _is_image_reference_string(value: str) -> bool:
+    return value.startswith("data:image/") or bool(_IMAGE_URL_RE.match(value.strip()))
+
+
+def serialize_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -64,7 +78,7 @@ def extract_text_content(node: Any) -> str:
         if value is None:
             return
         if isinstance(value, str):
-            if value.strip():
+            if value.strip() and not _is_image_reference_string(value):
                 parts.append(value.strip())
             return
         if isinstance(value, list):
@@ -98,14 +112,14 @@ def extract_text_content(node: Any) -> str:
 def extract_context_text(data: dict[str, Any], request_format: str) -> str:
     input_payload = request_input_payload(data, request_format)
     if isinstance(input_payload, str):
-        return input_payload.strip()
+        return "" if _is_image_reference_string(input_payload) else input_payload.strip()
     chunks: list[str] = []
 
     def visit(node: Any) -> None:
         if node is None:
             return
         if isinstance(node, str):
-            if node.strip():
+            if node.strip() and not _is_image_reference_string(node):
                 chunks.append(node.strip())
             return
         if isinstance(node, list):
@@ -176,13 +190,7 @@ def extract_request_messages(
         if request_format == "anthropic_messages" and role == "user":
             content_blocks = item.get("content")
             if isinstance(content_blocks, list):
-                text_parts = [
-                    block
-                    for block in content_blocks
-                    if isinstance(block, dict)
-                    and str(block.get("type", "")).strip() in {"text", "input_text"}
-                ]
-                content = extract_text_content(text_parts)
+                content = serialize_content(content_blocks)
                 if content:
                     extracted.append(
                         {
@@ -200,7 +208,7 @@ def extract_request_messages(
                         continue
                     if str(content_block.get("type", "")).strip() != "tool_result":
                         continue
-                    output = extract_text_content(content_block.get("content"))
+                    output = serialize_content(content_block.get("content"))
                     call_id = str(content_block.get("tool_use_id", "")).strip()
                     if output:
                         extracted.append(
@@ -223,7 +231,7 @@ def extract_request_messages(
                         )
             continue
         if role == "user":
-            content = extract_text_content(item.get("content"))
+            content = serialize_content(item.get("content"))
             if content:
                 extracted.append(
                     {
@@ -238,7 +246,7 @@ def extract_request_messages(
                 )
             continue
         if request_format == "chat_completions" and role == "tool":
-            output = extract_text_content(item.get("content"))
+            output = serialize_content(item.get("content"))
             call_id = str(item.get("tool_call_id", "")).strip()
             if output:
                 extracted.append(
@@ -261,7 +269,7 @@ def extract_request_messages(
                 )
             continue
         if item_type == "function_call_output":
-            output = str(item.get("output", "")).strip()
+            output = serialize_content(item.get("output", ""))
             call_id = str(item.get("call_id", "")).strip()
             if output:
                 extracted.append(

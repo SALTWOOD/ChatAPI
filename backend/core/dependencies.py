@@ -6,6 +6,7 @@ from .auth import AuthContext
 from .config import Settings
 from ..repositories import ConversationStore
 from ..services import MessageRateLimiter, PendingTurnRegistry
+from ..services.image_assets import ImageAssetStore
 
 
 @dataclass(frozen=True)
@@ -15,3 +16,4 @@ class AppDependencies:
     store: ConversationStore
     pending_turns: PendingTurnRegistry
     message_rate_limiter: MessageRateLimiter
+    image_store: ImageAssetStore

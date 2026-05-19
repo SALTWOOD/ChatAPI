@@ -148,11 +148,12 @@ class TurnCoordinator:
         if not isinstance(data, dict):
             return build_openai_error("request body must be a JSON object")
 
-        context_text = extract_context_text(data, request_format)
+        normalized_data = self._deps.image_store.normalize_request_data(data)
+        context_text = extract_context_text(normalized_data, request_format)
         if not context_text:
             return build_openai_error("input is required")
 
-        model = str(data.get("model") or "mock-gpt-4.1-mini")
+        model = str(normalized_data.get("model") or "mock-gpt-4.1-mini")
         owner = self.auth.owner_id()
         if not self.message_rate_limiter.allow(owner):
             return build_openai_error(
@@ -163,7 +164,7 @@ class TurnCoordinator:
 
         conversation, conversation_error = resolve_conversation_for_request(
             self.store,
-            data,
+            normalized_data,
             owner,
             request_format,
         )
@@ -183,7 +184,7 @@ class TurnCoordinator:
 
         extracted_messages = extract_request_messages(
             self.store,
-            data,
+            normalized_data,
             conversation_id=conversation.id,
             owner=owner,
             request_format=request_format,
@@ -214,16 +215,16 @@ class TurnCoordinator:
             model=model,
             input_text=context_text,
             request_format=request_format,
-            available_tool_names=_extract_tool_names(data),
-            available_tool_schemas=_extract_tool_schemas(data),
+            available_tool_names=_extract_tool_names(normalized_data),
+            available_tool_schemas=_extract_tool_schemas(normalized_data),
         )
         try:
             request_debug_metadata = build_message_debug_metadata(
                 auth=self.auth,
                 request_format=request_format,
-                request_data=data,
+                request_data=normalized_data,
                 input_text=context_text,
-                input_payload=request_input_payload(data, request_format),
+                input_payload=request_input_payload(normalized_data, request_format),
                 request_id=pending.request_id,
                 resolved_model=model,
             )
@@ -337,8 +338,6 @@ class TurnCoordinator:
         text = str(data.get("text", "")).strip()
         tool_name = str(data.get("tool_name", "")).strip()
         tool_call_id = str(data.get("tool_call_id", "")).strip()
-        if mode == "assistant_message" and not text:
-            return {"error": "text is required"}, 400
         if mode == "tool_call":
             if not tool_name:
                 return {"error": "tool_name is required"}, 400
@@ -373,7 +372,6 @@ class TurnCoordinator:
                 pending, assistant_metadata = self._output_controller.complete_assistant_message(
                     conversation_id=conversation_id,
                     owner_id=owner,
-                    text=text,
                     provider="human",
                     model=str(data.get("model") or pending.model or "mock-gpt-4.1-mini"),
                 )

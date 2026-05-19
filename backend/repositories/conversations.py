@@ -366,6 +366,29 @@ class ConversationStore:
             for row in rows
         ]
 
+    def iter_messages(self) -> list[ConversationMessage]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, conversation_id, role, content, status, response_id, metadata, created_at
+                FROM messages
+                ORDER BY datetime(created_at) ASC
+                """
+            ).fetchall()
+        return [
+            ConversationMessage(
+                id=str(row["id"]),
+                conversation_id=str(row["conversation_id"]),
+                role=str(row["role"]),
+                content=str(row["content"]),
+                created_at=str(row["created_at"]),
+                status=str(row["status"]),
+                response_id=str(row["response_id"]) if row["response_id"] else None,
+                metadata=_json_load(row["metadata"], {}),
+            )
+            for row in rows
+        ]
+
     def get_statistics_summary(
         self,
         owner_id: str,

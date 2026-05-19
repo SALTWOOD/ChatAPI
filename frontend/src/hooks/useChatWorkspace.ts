@@ -710,7 +710,7 @@ export function useChatWorkspace(isMobile: boolean) {
     if (!isWaitingForUser) return
     const finalText =
       composerMode === 'assistant_message'
-        ? `${draftBuffer}${composer}`.trim()
+        ? ''
         : (() => {
             try {
               return buildToolCallPayload()
@@ -719,16 +719,43 @@ export function useChatWorkspace(isMobile: boolean) {
               return ''
             }
           })()
+    const pendingChunk =
+      composerMode === 'assistant_message'
+        ? composer.trim()
+        : ''
 
-    if (!finalText) {
+    if (composerMode === 'assistant_message' && !draftBuffer.trim() && !pendingChunk) {
+      return
+    }
+
+    if (composerMode === 'tool_call' && !finalText) {
       return
     }
 
     setSending(true)
     try {
+      if (composerMode === 'assistant_message' && pendingChunk) {
+        const draftResponse = await requestJson<{
+          draft_text?: string
+          draft_length: number
+        }>('/api/chat/output/delta', {
+          method: 'POST',
+          body: JSON.stringify({
+            text: pendingChunk,
+            conversation_id: selectedConversationId || undefined,
+          }),
+        })
+        setDraftBufferForConversation(
+          selectedConversationId,
+          typeof draftResponse.draft_text === 'string'
+            ? draftResponse.draft_text
+            : `${draftBuffer}${pendingChunk}`,
+        )
+      }
+
       setDraftBufferForConversation(selectedConversationId, '')
       const payload = {
-        text: finalText,
+        text: composerMode === 'tool_call' ? finalText : undefined,
         mode: composerMode,
         tool_name: composerMode === 'tool_call' ? toolName.trim() || undefined : undefined,
         tool_call_id:

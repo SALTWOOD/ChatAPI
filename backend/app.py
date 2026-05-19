@@ -5,7 +5,7 @@ from flask_cors import CORS
 
 from .core import AppDependencies, AuthContext, settings
 from .repositories import ConversationStore
-from .services import MessageRateLimiter, PendingTurnRegistry
+from .services import ImageAssetStore, MessageRateLimiter, PendingTurnRegistry
 from .services.realtime import RealtimeBroker
 from .routes import (
     register_auth_routes,
@@ -13,6 +13,7 @@ from .routes import (
     register_realtime_routes,
     register_response_routes,
     register_statistics_routes,
+    register_upload_routes,
 )
 
 
@@ -27,6 +28,7 @@ def create_app() -> Flask:
     message_rate_limiter = MessageRateLimiter(
         limit=settings.messages_per_minute_limit
     )
+    image_store = ImageAssetStore(settings.uploads_img_dir)
     realtime = RealtimeBroker(store)
     deps = AppDependencies(
         settings=settings,
@@ -34,9 +36,13 @@ def create_app() -> Flask:
         store=store,
         pending_turns=pending_turns,
         message_rate_limiter=message_rate_limiter,
+        image_store=image_store,
     )
     app.extensions["chat_store"] = store
     app.extensions["chat_realtime"] = realtime
+    app.extensions["chat_image_store"] = image_store
+
+    image_store.cleanup_orphans(store.iter_messages())
 
     @app.get("/api/health")
     def health():
@@ -47,6 +53,7 @@ def create_app() -> Flask:
     register_realtime_routes(app, deps=deps)
     register_response_routes(app, deps=deps)
     register_statistics_routes(app, deps=deps)
+    register_upload_routes(app, deps=deps)
 
     if settings.web_dist_dir:
         web_dist_dir = settings.web_dist_dir

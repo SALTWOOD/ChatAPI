@@ -60,7 +60,9 @@ class Settings:
     session_secret: str
     totp_secret: str
     api_key: str
+    data_dir: Path
     db_path: Path
+    uploads_img_dir: Path
     cors_origins: list[str]
     host: str
     port: int
@@ -80,6 +82,7 @@ class Settings:
         db_path = Path(_first_non_empty("CHATAPI_DB_PATH", default=str(data_dir / "chatapi.sqlite3")))
         if not db_path.is_absolute():
             db_path = (repo_root / db_path).resolve()
+        uploads_img_dir = data_dir / "uploads" / "imgs"
         cors_raw = _first_non_empty(
             "CHATAPI_CORS_ORIGINS",
             "CORS_ORIGINS",
@@ -119,7 +122,9 @@ class Settings:
             ),
             totp_secret=_first_non_empty("CHATAPI_TOTP_SECRET", "ADMIN_TOTP_SECRET", default=""),
             api_key=_first_non_empty("CHATAPI_API_KEY", default=""),
+            data_dir=data_dir,
             db_path=db_path,
+            uploads_img_dir=uploads_img_dir,
             cors_origins=_split_csv(cors_raw),
             host=_first_non_empty("CHATAPI_HOST", "BACKEND_HOST", default="0.0.0.0"),
             port=int(_first_non_empty("CHATAPI_PORT", "BACKEND_PORT", default="5000")),

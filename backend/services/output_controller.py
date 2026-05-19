@@ -51,17 +51,11 @@ class TurnOutputController:
         *,
         conversation_id: str,
         owner_id: str,
-        text: str,
         provider: str,
         model: str | None = None,
     ):
         pending = self._require_pending(conversation_id, owner_id)
-        submitted_text = normalize_message_text(text)
-        assistant_text = (
-            submitted_text
-            if not pending.draft_text or submitted_text.startswith(pending.draft_text)
-            else f"{pending.draft_text}{submitted_text}"
-        )
+        assistant_text = pending.draft_text
         if not assistant_text.strip():
             raise ValueError("assistant message text is required")
         response_id = build_protocol_response_id(pending.request_format, pending.request_id)
