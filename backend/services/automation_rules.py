@@ -74,6 +74,9 @@ class AutomationRule:
     action_type: str
     action_text: str
     error_message: str
+    tool_name: str = ""
+    tool_arguments: str = ""
+    tool_call_id: str = ""
 
     def matches(self, input_text: str) -> bool:
         if self.contains and not all(_match_pattern(item, input_text) for item in self.contains):
@@ -94,6 +97,26 @@ def _match_pattern(item: dict[str, str], input_text: str) -> bool:
         except re.error:
             return False
     return pattern in input_text
+
+
+def _validate_tool_arguments(arguments_json: str, schema: dict[str, Any]) -> bool:
+    try:
+        args = json.loads(arguments_json) if arguments_json.strip() else {}
+    except (json.JSONDecodeError, ValueError):
+        return False
+    if not isinstance(args, dict):
+        return False
+    properties = schema.get("properties")
+    if isinstance(properties, dict) and properties:
+        for key in args:
+            if key not in properties:
+                return False
+    required = schema.get("required")
+    if isinstance(required, list):
+        for field in required:
+            if field not in args:
+                return False
+    return True
 
 
 def normalize_rule_payload(raw_rule: dict[str, Any]) -> dict[str, Any]:
@@ -123,6 +146,9 @@ def normalize_rule_payload(raw_rule: dict[str, Any]) -> dict[str, Any]:
             "type": str(action.get("type") or "").strip(),
             "text": str(action.get("text") or ""),
             "error_message": str(action.get("error_message") or ""),
+            "tool_name": str(action.get("tool_name") or ""),
+            "tool_arguments": str(action.get("tool_arguments") or ""),
+            "tool_call_id": str(action.get("tool_call_id") or ""),
         },
     }
 
@@ -152,16 +178,19 @@ def validate_rule_payload(raw_rule: dict[str, Any]) -> tuple[dict[str, Any] | No
                 except re.error as error:
                     return None, f"invalid regex: {error}"
     action_type = normalized["action"]["type"]
-    if action_type not in {"output_text", "complete", "error"}:
-        return None, "action.type must be one of output_text, complete, error"
+    if action_type not in {"output_text", "complete", "error", "tool_call"}:
+        return None, "action.type must be one of output_text, complete, error, tool_call"
     if action_type == "output_text" and not normalized["action"]["text"]:
         return None, "output_text rule requires action.text"
     if action_type == "error" and not normalized["action"]["error_message"]:
         return None, "error rule requires action.error_message"
+    if action_type == "tool_call" and not normalized["action"].get("tool_name"):
+        return None, "tool_call rule requires action.tool_name"
     return normalized, None
 
 
 def materialize_rule(payload: dict[str, Any]) -> AutomationRule:
+    action = payload.get("action", {})
     return AutomationRule(
         id=str(payload["id"]),
         enabled=bool(payload["enabled"]),
@@ -169,9 +198,12 @@ def materialize_rule(payload: dict[str, Any]) -> AutomationRule:
         excludes=list(payload["conditions"]["excludes"]),
         delay_seconds=float(payload["timing"]["delay_seconds"]),
         repeat_interval_seconds=float(payload["timing"]["repeat_interval_seconds"]),
-        action_type=str(payload["action"]["type"]),
-        action_text=str(payload["action"]["text"]),
-        error_message=str(payload["action"]["error_message"]),
+        action_type=str(action.get("type") or ""),
+        action_text=str(action.get("text") or ""),
+        error_message=str(action.get("error_message") or ""),
+        tool_name=str(action.get("tool_name") or ""),
+        tool_arguments=str(action.get("tool_arguments") or ""),
+        tool_call_id=str(action.get("tool_call_id") or ""),
     )
 
 
@@ -292,6 +324,27 @@ class AutomationRuleEngine:
                         conversation_id=conversation_id,
                         owner_id=owner_id,
                         error_message=rule.error_message,
+                    )
+                    return
+                elif rule.action_type == "tool_call":
+                    tool_name = str(rule.tool_name or "").strip()
+                    tool_arguments = str(rule.tool_arguments or "")
+                    tool_call_id = str(rule.tool_call_id or "") or None
+                    if not tool_name:
+                        return
+                    if pending.available_tool_names and tool_name not in pending.available_tool_names:
+                        return
+                    tool_schema = pending.available_tool_schemas.get(tool_name)
+                    if tool_schema is not None:
+                        if not _validate_tool_arguments(tool_arguments, tool_schema):
+                            return
+                    self._output_controller.complete_tool_call(
+                        conversation_id=conversation_id,
+                        owner_id=owner_id,
+                        tool_name=tool_name,
+                        arguments=tool_arguments,
+                        provider="rule",
+                        tool_call_id=tool_call_id,
                     )
                     return
             except ValueError:

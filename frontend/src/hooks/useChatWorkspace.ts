@@ -94,6 +94,7 @@ export function useChatWorkspace(isMobile: boolean) {
   const [automationRules, setAutomationRules] = useState<AutomationRule[]>([])
   const [editingAutomationRule, setEditingAutomationRule] = useState<AutomationRule | null>(null)
   const [savingAutomationRules, setSavingAutomationRules] = useState(false)
+  const [apiKey, setApiKey] = useState('')
   const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const shouldStickToBottomRef = useRef(true)
@@ -177,6 +178,9 @@ export function useChatWorkspace(isMobile: boolean) {
         setAuth(session)
         if (session.authenticated) {
           await loadAutomationRules()
+          requestJson<{ ok: boolean; api_key: string }>('/api/config/app-info')
+            .then((info) => { if (active && info.ok) setApiKey(info.api_key) })
+            .catch(() => {})
         }
       } catch (error) {
         if (active) {
@@ -438,6 +442,9 @@ export function useChatWorkspace(isMobile: boolean) {
         type: 'output_text',
         text: '',
         error_message: '',
+        tool_name: '',
+        tool_arguments: '',
+        tool_call_id: '',
       },
     }
   }
@@ -479,6 +486,9 @@ export function useChatWorkspace(isMobile: boolean) {
         ...rule.action,
         text: rule.action.text ?? '',
         error_message: rule.action.error_message ?? '',
+        tool_name: rule.action.tool_name ?? '',
+        tool_arguments: rule.action.tool_arguments ?? '',
+        tool_call_id: rule.action.tool_call_id ?? '',
       },
     }
 
@@ -492,6 +502,10 @@ export function useChatWorkspace(isMobile: boolean) {
     }
     if (normalized.action.type === 'error' && !normalized.action.error_message.trim()) {
       message.warning('返回 error 时必须填写错误信息')
+      return
+    }
+    if (normalized.action.type === 'tool_call' && !normalized.action.tool_name?.trim()) {
+      message.warning('工具调用时必须选择一个 tool')
       return
     }
 
@@ -769,6 +783,7 @@ export function useChatWorkspace(isMobile: boolean) {
     abortPopoverConversationId,
     abortReason,
     abortingConversationId,
+    apiKey,
     auth,
     availableToolSchemas,
     booting,

@@ -170,6 +170,7 @@ export function WorkspaceRoute() {
           </Header>
           <Content className="content-shell">
             <ChatPane
+              apiKey={workspace.apiKey}
               availableToolSchemas={workspace.availableToolSchemas}
               bottomRef={workspace.bottomRef}
               chatScrollRef={workspace.chatScrollRef}

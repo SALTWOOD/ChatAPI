@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type UIEvent } from 'react'
 
 import {
+  App,
   Avatar,
   Button,
   Card,
@@ -11,16 +12,15 @@ import {
   Segmented,
   Space,
   Spin,
-  Switch,
   Typography,
 } from 'antd'
-import { LogoutOutlined, MenuOutlined, SaveOutlined, SendOutlined, UserOutlined } from '@ant-design/icons'
+import { LogoutOutlined, MenuOutlined, SaveOutlined, SendOutlined, UserOutlined, CopyOutlined } from '@ant-design/icons'
 
-import { formatJson, formatTime, getSchemaType, renderMessageContent } from '../lib/chat-format'
+import { formatJson, formatTime, renderMessageContent, buildCurlCommand } from '../lib/chat-format'
 import { ThemeToggle } from './ThemeToggle'
+import { ToolField } from './ToolField'
 import type {
   ComposerMode,
-  JsonSchema,
   ToolFieldValue,
   ToolSchemaOption,
   VisibleMessage,
@@ -29,6 +29,7 @@ import type {
 const { TextArea } = Input
 
 type ChatPaneProps = {
+  apiKey: string
   availableToolSchemas: ToolSchemaOption[]
   bottomRef: React.RefObject<HTMLDivElement | null>
   chatScrollRef: React.RefObject<HTMLDivElement | null>
@@ -59,107 +60,10 @@ type ChatPaneProps = {
   visibleMessages: VisibleMessage[]
 }
 
-function ToolField({
-  disabled,
-  fieldName,
-  onChange,
-  required,
-  schema,
-  value,
-}: {
-  disabled: boolean
-  fieldName: string
-  onChange: (fieldName: string, value: ToolFieldValue | string) => void
-  required: boolean
-  schema: JsonSchema
-  value: ToolFieldValue | undefined
-}) {
-  const type = getSchemaType(schema)
-  const label = schema.title || fieldName
-  const description = schema.description || ''
-
-  if (schema.enum?.length) {
-    return (
-      <div key={fieldName} className="tool-form-item">
-        <div className="tool-form-label-row">
-          <span className="tool-form-label">
-            {label}
-            {required && <span className="tool-form-required">*</span>}
-          </span>
-          <span className="tool-form-type">enum</span>
-        </div>
-        {description ? <div className="tool-form-description">{description}</div> : null}
-        <Select
-          value={value}
-          allowClear={!required}
-          placeholder={`选择 ${label}`}
-          options={schema.enum.map((option) => ({
-            label: String(option),
-            value: option,
-          }))}
-          onChange={(nextValue) => onChange(fieldName, nextValue as ToolFieldValue)}
-          disabled={disabled}
-        />
-      </div>
-    )
-  }
-
-  if (type === 'boolean') {
-    return (
-      <div key={fieldName} className="tool-form-item">
-        <div className="tool-form-label-row">
-          <span className="tool-form-label">
-            {label}
-            {required && <span className="tool-form-required">*</span>}
-          </span>
-          <span className="tool-form-type">boolean</span>
-        </div>
-        {description ? <div className="tool-form-description">{description}</div> : null}
-        <Switch
-          checked={Boolean(value)}
-          onChange={(checked) => onChange(fieldName, checked)}
-          disabled={disabled}
-        />
-      </div>
-    )
-  }
-
-  const isComplex = type === 'array' || type === 'object'
-  const placeholder = isComplex ? `请输入 ${label} 的 JSON` : description || `请输入 ${label}`
-
-  return (
-    <div key={fieldName} className="tool-form-item">
-      <div className="tool-form-label-row">
-        <span className="tool-form-label">
-          {label}
-          {required && <span className="tool-form-required">*</span>}
-        </span>
-        <span className="tool-form-type">{type || 'string'}</span>
-      </div>
-      {description ? <div className="tool-form-description">{description}</div> : null}
-      {isComplex ? (
-        <TextArea
-          value={typeof value === 'string' ? value : ''}
-          onChange={(event) => onChange(fieldName, event.target.value)}
-          placeholder={placeholder}
-          autoSize={{ minRows: 3, maxRows: 8 }}
-          disabled={disabled}
-        />
-      ) : (
-        <Input
-          value={value == null ? '' : String(value)}
-          type={type === 'number' || type === 'integer' ? 'number' : 'text'}
-          onChange={(event) => onChange(fieldName, event.target.value)}
-          placeholder={placeholder}
-          disabled={disabled}
-        />
-      )}
-    </div>
-  )
-}
-
 export function ChatPane(props: ChatPaneProps) {
+  const { message: antMessage } = App.useApp()
   const {
+    apiKey,
     availableToolSchemas,
     bottomRef,
     chatScrollRef,
@@ -402,7 +306,38 @@ export function ChatPane(props: ChatPaneProps) {
                         ) : null}
                         {requestDebug?.request_body != null ? (
                           <div className="message-debug-block">
-                            <div className="message-debug-label">Request Body</div>
+                            <div className="message-debug-label-row">
+                              <span className="message-debug-label">Request Body</span>
+                              <Button
+                                size="small"
+                                type="link"
+                                icon={<CopyOutlined />}
+                                className="copy-curl-btn"
+                                onClick={() => {
+                                  const curl = buildCurlCommand(requestDebug!.request_body, apiKey)
+                                  if (!curl) return
+                                  if (navigator.clipboard && window.isSecureContext) {
+                                    navigator.clipboard.writeText(curl).then(() => {
+                                      antMessage.success('已复制 curl')
+                                    }).catch(() => {
+                                      antMessage.error('复制失败')
+                                    })
+                                  } else {
+                                    const textarea = document.createElement('textarea')
+                                    textarea.value = curl
+                                    textarea.style.position = 'fixed'
+                                    textarea.style.opacity = '0'
+                                    document.body.appendChild(textarea)
+                                    textarea.select()
+                                    document.execCommand('copy')
+                                    document.body.removeChild(textarea)
+                                    antMessage.success('已复制 curl')
+                                  }
+                                }}
+                              >
+                                复制 curl
+                              </Button>
+                            </div>
                             <pre>{formatJson(requestDebug.request_body)}</pre>
                           </div>
                         ) : null}

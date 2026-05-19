@@ -111,9 +111,12 @@ export type AutomationRule = {
     repeat_interval_seconds: number
   }
   action: {
-    type: 'output_text' | 'complete' | 'error'
+    type: 'output_text' | 'complete' | 'error' | 'tool_call'
     text: string
     error_message: string
+    tool_name?: string
+    tool_arguments?: string
+    tool_call_id?: string
   }
 }
 

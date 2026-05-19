@@ -26,6 +26,8 @@ class PendingTurn:
     response_mode: str = "assistant_message"
     response_output_items: list[dict[str, Any]] = field(default_factory=list)
     response_output_text: str = ""
+    available_tool_names: set[str] = field(default_factory=set)
+    available_tool_schemas: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class PendingTurnRegistry:
@@ -42,6 +44,8 @@ class PendingTurnRegistry:
         model: str,
         input_text: str,
         request_format: str = "responses",
+        available_tool_names: set[str] | None = None,
+        available_tool_schemas: dict[str, dict[str, Any]] | None = None,
     ) -> PendingTurn:
         with self._lock:
             if conversation_id in self._by_conversation_id:
@@ -53,6 +57,8 @@ class PendingTurnRegistry:
                 model=model,
                 input_text=input_text,
                 request_format=request_format,
+                available_tool_names=available_tool_names or set(),
+                available_tool_schemas=available_tool_schemas or {},
             )
             self._by_request_id[pending.request_id] = pending
             self._by_conversation_id[conversation_id] = pending.request_id

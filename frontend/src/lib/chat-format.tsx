@@ -242,3 +242,23 @@ export function renderMessageContent(rawContent: string) {
     )
   })
 }
+
+export function buildCurlCommand(requestBody: unknown, apiKey: string): string {
+  if (requestBody == null) return ''
+  const origin = window.location.origin
+  const format = (requestBody as Record<string, unknown>)?.model != null
+    && 'input' in (requestBody as Record<string, unknown>)
+    && !('messages' in (requestBody as Record<string, unknown>))
+    && !('max_tokens' in (requestBody as Record<string, unknown>))
+    ? 'responses'
+    : (requestBody as Record<string, unknown>)?.messages != null
+      ? 'chat_completions'
+      : 'anthropic'
+
+  let endpoint = '/v1/responses'
+  if (format === 'chat_completions') endpoint = '/v1/chat/completions'
+  else if (format === 'anthropic') endpoint = '/messages'
+
+  const body = JSON.stringify(requestBody, null, 2)
+  return `curl '${origin}${endpoint}' \\\n  -H 'Content-Type: application/json' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -d '${body}'`
+}

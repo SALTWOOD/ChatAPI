@@ -226,3 +226,89 @@ curl https://127.0.0.1:5000/messages \
     "stream": true
   }'
 ```
+
+---
+
+## 6. 项目结构
+
+```
+ChatAPI/
+├── backend/                    # Python/Flask backend
+│   ├── core/                   # Core config, auth, dependencies
+│   ├── routes/                 # Flask route handlers
+│   ├── services/               # Business logic (streaming, turn coordination, etc.)
+│   ├── repositories/           # SQLite data access layer
+│   ├── .env                    # Live environment config (gitignored)
+│   ├── .env.example            # Environment template
+│   ├── app.py                  # Flask app factory
+│   ├── main.py                 # Entry point (runs Flask dev server)
+│   └── pyproject.toml          # Python dependencies (uv)
+├── frontend/                   # React/Vite frontend
+│   ├── src/
+│   │   ├── components/         # UI components
+│   │   ├── hooks/              # Custom React hooks
+│   │   ├── lib/                # Utility functions
+│   │   ├── types/              # TypeScript type definitions
+│   │   ├── theme/              # Theme provider
+│   │   └── assets/             # Static assets
+│   ├── homepage.html           # Standalone landing page (rendered in iframe)
+│   ├── vite.config.ts          # Vite build config
+│   └── package.json            # Node dependencies
+├── certs/                      # TLS certificates (gitignored)
+├── data/                       # SQLite database storage (gitignored)
+├── tests/                      # Test files
+├── deploy_rsync.sh             # Deployment script
+└── README.md                   # Project documentation
+```
+
+### Backend 核心文件
+
+| 文件 | 用途 |
+|---|---|
+| `backend/main.py` | 入口，启动 Flask 服务 |
+| `backend/app.py` | Flask app factory，路由注册，静态文件托管 |
+| `backend/core/config.py` | Settings dataclass，从 `.env` 加载配置 |
+| `backend/core/auth.py` | Session + API key 认证，TOTP 验证 |
+| `backend/core/dependencies.py` | AppDependencies 依赖注入 |
+| `backend/routes/auth.py` | 登录/登出/会话接口 |
+| `backend/routes/conversations.py` | 会话 CRUD、裁剪、中止 |
+| `backend/routes/responses.py` | `/v1/responses`、`/v1/chat/completions`、`/messages` 接口 |
+| `backend/routes/realtime.py` | WebSocket 实时更新 |
+| `backend/routes/statistics.py` | 统计/摘要接口 |
+| `backend/services/turn_coordinator.py` | Human-in-the-loop 轮次协调 |
+| `backend/services/realtime.py` | WebSocket pub/sub broker |
+| `backend/services/pending.py` | 等待中的轮次注册 |
+| `backend/services/output_controller.py` | Assistant 输出控制 |
+| `backend/services/response_stream.py` | 流式响应总入口 |
+| `backend/services/stream_responses.py` | OpenAI Responses 格式流式输出 |
+| `backend/services/stream_chat_completions.py` | Chat Completions 格式流式输出 |
+| `backend/services/stream_anthropic.py` | Anthropic Messages 格式流式输出 |
+| `backend/services/stream_common.py` | 流式输出公共工具 |
+| `backend/services/turn_protocols.py` | 请求解析/格式标准化 |
+| `backend/services/payload_openai.py` | OpenAI Responses 格式响应构建 |
+| `backend/services/payload_chat_completions.py` | Chat Completions 格式响应构建 |
+| `backend/services/payload_anthropic.py` | Anthropic Messages 格式响应构建 |
+| `backend/services/response_payloads.py` | 共享响应 payload 工具 |
+| `backend/services/automation_rules.py` | 自动化规则引擎 |
+| `backend/services/rate_limit.py` | 用户级消息速率限制 |
+| `backend/services/ntfy.py` | ntfy 推送通知集成 |
+| `backend/repositories/conversations.py` | SQLite 数据访问层 |
+
+### Frontend 核心文件
+
+| 文件 | 用途 |
+|---|---|
+| `frontend/src/main.tsx` | React 入口，BrowserRouter，ThemeProvider |
+| `frontend/src/App.tsx` | 顶层路由 (`/`, `/login`, `/app/*`, `/stat`) |
+| `frontend/src/components/WorkspaceRoute.tsx` | 主工作区布局（侧边栏 + 聊天面板） |
+| `frontend/src/components/ChatPane.tsx` | 聊天消息展示、输入框、Tool Call 表单 |
+| `frontend/src/components/ConversationSidebar.tsx` | 会话列表、设置、自动化规则编辑 |
+| `frontend/src/components/LoginScreen.tsx` | 登录表单（含可选 TOTP） |
+| `frontend/src/components/HomepageScreen.tsx` | 首页（iframe 加载 homepage.html） |
+| `frontend/src/components/StatisticsPage.tsx` | 独立统计页面 |
+| `frontend/src/hooks/useChatWorkspace.ts` | 主工作区状态管理（WebSocket、会话、消息） |
+| `frontend/src/hooks/useAuthSession.ts` | 认证会话管理 |
+| `frontend/src/lib/api.ts` | HTTP/WebSocket 请求工具函数 |
+| `frontend/src/lib/chat-format.tsx` | 消息渲染、JSON 格式化、Schema 解析 |
+| `frontend/src/types/chat.ts` | TypeScript 类型定义 |
+| `frontend/src/theme/ThemeProvider.tsx` | Ant Design 主题提供者 |

@@ -27,6 +27,44 @@ from .turn_protocols import (
 )
 
 
+def _extract_tool_names(data: dict[str, Any]) -> set[str]:
+    raw_tools = data.get("tools")
+    if not isinstance(raw_tools, list):
+        return set()
+    names: set[str] = set()
+    for tool in raw_tools:
+        if not isinstance(tool, dict):
+            continue
+        func = tool.get("function")
+        if isinstance(func, dict):
+            name = func.get("name")
+        else:
+            name = tool.get("name")
+        if isinstance(name, str) and name.strip():
+            names.add(name.strip())
+    return names
+
+
+def _extract_tool_schemas(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_tools = data.get("tools")
+    if not isinstance(raw_tools, list):
+        return {}
+    schemas: dict[str, dict[str, Any]] = {}
+    for tool in raw_tools:
+        if not isinstance(tool, dict):
+            continue
+        func = tool.get("function")
+        if isinstance(func, dict):
+            name = func.get("name")
+            parameters = func.get("parameters", {})
+        else:
+            name = tool.get("name")
+            parameters = tool.get("input_schema", {})
+        if isinstance(name, str) and name.strip():
+            schemas[name.strip()] = parameters if isinstance(parameters, dict) else {}
+    return schemas
+
+
 @dataclass(frozen=True)
 class PreparedTurn:
     pending: PendingTurn
@@ -176,6 +214,8 @@ class TurnCoordinator:
             model=model,
             input_text=context_text,
             request_format=request_format,
+            available_tool_names=_extract_tool_names(data),
+            available_tool_schemas=_extract_tool_schemas(data),
         )
         try:
             request_debug_metadata = build_message_debug_metadata(

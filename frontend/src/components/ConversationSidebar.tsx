@@ -1,15 +1,18 @@
+import { useEffect, useState } from 'react'
 import {
   Avatar,
   Badge,
   Button,
+  Card,
   Empty,
   Input,
   InputNumber,
   List,
   Modal,
   Popover,
-  Space,
   Select,
+  Space,
+  Spin,
   Tooltip,
   Typography,
 } from 'antd'
@@ -22,13 +25,17 @@ import {
   StopOutlined,
 } from '@ant-design/icons'
 
-import { formatTime } from '../lib/chat-format'
+import { formatTime, getLastToolSchemas, buildInitialToolFormValues } from '../lib/chat-format'
+import { requestJson } from '../lib/api'
 import { SettingsModal } from './settings/SettingsModal'
+import { ToolField } from './ToolField'
 import type {
   AuthSession,
   AutomationRule,
-  AutomationRuleCondition,
   Conversation,
+  MessageItem,
+  ToolFieldValue,
+  ToolSchemaOption,
 } from '../types/chat'
 
 type ConversationSidebarProps = {
@@ -104,18 +111,99 @@ export function ConversationSidebar({
   setPruneKeepCount,
   setPruneModalOpen,
 }: ConversationSidebarProps) {
-  function updateConditionList(
-    group: 'contains' | 'excludes',
-    updater: (items: AutomationRuleCondition[]) => AutomationRuleCondition[],
-  ) {
+  const [toolCallModalOpen, setToolCallModalOpen] = useState(false)
+  const [toolCallSchemaConversationId, setToolCallSchemaConversationId] = useState('')
+  const [toolCallSchemas, setToolCallSchemas] = useState<ToolSchemaOption[]>([])
+  const [toolCallSchemasLoading, setToolCallSchemasLoading] = useState(false)
+  const [toolCallToolName, setToolCallToolName] = useState('')
+  const [toolCallFormValues, setToolCallFormValues] = useState<Record<string, ToolFieldValue>>({})
+  const [toolCallId, setToolCallId] = useState('')
+
+  useEffect(() => {
+    if (!toolCallModalOpen || !toolCallSchemaConversationId) {
+      setToolCallSchemas([])
+      setToolCallToolName('')
+      setToolCallFormValues({})
+      return
+    }
+    let cancelled = false
+    setToolCallSchemasLoading(true)
+    requestJson<{ ok: boolean; items?: MessageItem[] }>(
+      `/api/conversations/${toolCallSchemaConversationId}/messages`,
+    )
+      .then((data) => {
+        if (cancelled) return
+        const messages = Array.isArray(data.items) ? data.items : []
+        setToolCallSchemas(getLastToolSchemas(messages))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setToolCallSchemas([])
+      })
+      .finally(() => {
+        if (!cancelled) setToolCallSchemasLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [toolCallModalOpen, toolCallSchemaConversationId])
+
+  function openToolCallModal() {
     if (!editingAutomationRule) return
+    const action = editingAutomationRule.action
+    setToolCallSchemaConversationId('')
+    setToolCallSchemas([])
+    setToolCallToolName(action.tool_name ?? '')
+    setToolCallFormValues(action.tool_arguments ? (() => {
+      try { return JSON.parse(action.tool_arguments) } catch { return {} }
+    })() : {})
+    setToolCallId(action.tool_call_id ?? '')
+    setToolCallModalOpen(true)
+  }
+
+  function handleToolCallModalOk() {
+    if (!editingAutomationRule) return
+    if (!toolCallToolName) {
+      return
+    }
+    let argumentsJson = '{}'
+    try {
+      const selectedSchema = toolCallSchemas.find((s) => s.name === toolCallToolName)
+      if (selectedSchema) {
+        const properties = selectedSchema.parameters?.properties ?? {}
+        const required = new Set(selectedSchema.parameters?.required ?? [])
+        const entries = Object.entries(properties).flatMap(([key, _schema]) => {
+          const rawValue = toolCallFormValues[key]
+          if (rawValue == null || rawValue === '') {
+            if (required.has(key)) return []
+            return []
+          }
+          return [[key, rawValue] as const]
+        })
+        argumentsJson = JSON.stringify(Object.fromEntries(entries))
+      }
+    } catch {
+      // keep default
+    }
     setEditingAutomationRule({
       ...editingAutomationRule,
-      conditions: {
-        ...editingAutomationRule.conditions,
-        [group]: updater(editingAutomationRule.conditions[group]),
+      action: {
+        ...editingAutomationRule.action,
+        type: 'tool_call',
+        tool_name: toolCallToolName,
+        tool_arguments: argumentsJson,
+        tool_call_id: toolCallId,
       },
     })
+    setToolCallModalOpen(false)
+  }
+
+  function validateRegex(pattern: string): boolean {
+    if (!pattern) return true
+    try {
+      new RegExp(pattern)
+      return true
+    } catch {
+      return false
+    }
   }
 
   return (
@@ -371,189 +459,66 @@ export function ConversationSidebar({
           <div className="automation-editor-section">
             <Typography.Title level={5} className="automation-editor-title">
               条件
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}
+              >
+                示例：weather|forecast、^帮我.*查天气$、(北京|上海).+天气
+              </Typography.Text>
             </Typography.Title>
-            <div className="automation-editor-grid">
-              <div>
-                <Typography.Text className="prune-input-label">请求中包含字符串</Typography.Text>
-                <div className="automation-condition-list">
-                  {(editingAutomationRule?.conditions.contains ?? []).map((item, index) => (
-                    <div className="automation-condition-row" key={`contains-${index}`}>
-                      <Select
-                        value={item.match_type}
-                        options={[
-                          { value: 'substring', label: '普通文本' },
-                          { value: 'regex', label: '正则' },
-                        ]}
-                        onChange={(value) =>
-                          updateConditionList('contains', (items) =>
-                            items.map((entry, entryIndex) =>
-                              entryIndex === index
-                                ? {
-                                    ...entry,
-                                    match_type: value as AutomationRuleCondition['match_type'],
-                                  }
-                                : entry,
-                            ),
-                          )
-                        }
-                        className="automation-condition-type"
-                      />
-                      <Input
-                        value={item.pattern}
-                        onChange={(event) =>
-                          updateConditionList('contains', (items) =>
-                            items.map((entry, entryIndex) =>
-                              entryIndex === index
-                                ? {
-                                    ...entry,
-                                    pattern: event.target.value,
-                                  }
-                                : entry,
-                            ),
-                          )
-                        }
-                        placeholder={
-                          item.match_type === 'regex'
-                            ? '示例：weather|forecast 或 ^帮我.*查天气$'
-                            : '示例：天气 或 帮我查一下'
-                        }
-                      />
-                      <Button
-                        danger
-                        onClick={() =>
-                          updateConditionList('contains', (items) =>
-                            items.filter((_, entryIndex) => entryIndex !== index),
-                          )
-                        }
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  ))}
-                  <Button
-                    onClick={() =>
-                      updateConditionList('contains', (items) => [
-                        ...items,
-                        { match_type: 'substring', pattern: '' },
-                      ])
-                    }
-                  >
-                    添加包含条件
-                  </Button>
-                </div>
-              </div>
-              <div>
-                <Typography.Text className="prune-input-label">请求中不包含字符串</Typography.Text>
-                <div className="automation-condition-list">
-                  {(editingAutomationRule?.conditions.excludes ?? []).map((item, index) => (
-                    <div className="automation-condition-row" key={`excludes-${index}`}>
-                      <Select
-                        value={item.match_type}
-                        options={[
-                          { value: 'substring', label: '普通文本' },
-                          { value: 'regex', label: '正则' },
-                        ]}
-                        onChange={(value) =>
-                          updateConditionList('excludes', (items) =>
-                            items.map((entry, entryIndex) =>
-                              entryIndex === index
-                                ? {
-                                    ...entry,
-                                    match_type: value as AutomationRuleCondition['match_type'],
-                                  }
-                                : entry,
-                            ),
-                          )
-                        }
-                        className="automation-condition-type"
-                      />
-                      <Input
-                        value={item.pattern}
-                        onChange={(event) =>
-                          updateConditionList('excludes', (items) =>
-                            items.map((entry, entryIndex) =>
-                              entryIndex === index
-                                ? {
-                                    ...entry,
-                                    pattern: event.target.value,
-                                  }
-                                : entry,
-                            ),
-                          )
-                        }
-                        placeholder={
-                          item.match_type === 'regex'
-                            ? '示例：上海|北京 或 ^debug:'
-                            : '示例：上海 或 不要联网'
-                        }
-                      />
-                      <Button
-                        danger
-                        onClick={() =>
-                          updateConditionList('excludes', (items) =>
-                            items.filter((_, entryIndex) => entryIndex !== index),
-                          )
-                        }
-                      >
-                        删除
-                      </Button>
-                    </div>
-                  ))}
-                  <Button
-                    onClick={() =>
-                      updateConditionList('excludes', (items) => [
-                        ...items,
-                        { match_type: 'substring', pattern: '' },
-                      ])
-                    }
-                  >
-                    添加排除条件
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="automation-editor-section">
-            <Typography.Title level={5} className="automation-editor-title">
-              时间
-            </Typography.Title>
-            <div className="automation-editor-grid">
-              <div>
-                <Typography.Text className="prune-input-label">收到后延时（秒）</Typography.Text>
-                <InputNumber
-                  min={0}
-                  value={editingAutomationRule?.timing.delay_seconds ?? 0}
-                  onChange={(value) => {
-                    if (!editingAutomationRule) return
+            <div>
+              <Typography.Text className="prune-input-label">正则表达式</Typography.Text>
+              <Input
+                value={editingAutomationRule?.conditions.contains?.[0]?.pattern ?? ''}
+                onChange={(event) => {
+                  if (!editingAutomationRule) return
+                  const pattern = event.target.value
+                  const currentConditions = editingAutomationRule.conditions.contains ?? []
+                  const firstCondition = currentConditions[0]
+                  if (firstCondition) {
                     setEditingAutomationRule({
                       ...editingAutomationRule,
-                      timing: {
-                        ...editingAutomationRule.timing,
-                        delay_seconds: typeof value === 'number' ? value : 0,
+                      conditions: {
+                        ...editingAutomationRule.conditions,
+                        contains: [
+                          { match_type: 'regex', pattern },
+                          ...currentConditions.slice(1),
+                        ],
                       },
                     })
-                  }}
-                  className="prune-input"
-                />
-              </div>
-              <div>
-                <Typography.Text className="prune-input-label">每隔时间重复（秒）</Typography.Text>
-                <InputNumber
-                  min={0}
-                  value={editingAutomationRule?.timing.repeat_interval_seconds ?? 0}
-                  onChange={(value) => {
-                    if (!editingAutomationRule) return
+                  } else {
                     setEditingAutomationRule({
                       ...editingAutomationRule,
-                      timing: {
-                        ...editingAutomationRule.timing,
-                        repeat_interval_seconds: typeof value === 'number' ? value : 0,
+                      conditions: {
+                        ...editingAutomationRule.conditions,
+                        contains: [{ match_type: 'regex', pattern }],
                       },
                     })
-                  }}
-                  className="prune-input"
-                />
-              </div>
+                  }
+                }}
+                placeholder="输入正则表达式，匹配的消息将触发规则"
+                status={
+                  editingAutomationRule?.conditions.contains?.[0]?.pattern &&
+                  !validateRegex(editingAutomationRule.conditions.contains[0].pattern)
+                    ? 'error'
+                    : undefined
+                }
+                style={
+                  editingAutomationRule?.conditions.contains?.[0]?.pattern
+                    ? {
+                        borderColor: validateRegex(editingAutomationRule.conditions.contains[0].pattern)
+                          ? '#52c41a'
+                          : '#ff4d4f',
+                      }
+                    : undefined
+                }
+              />
+              {editingAutomationRule?.conditions.contains?.[0]?.pattern &&
+                !validateRegex(editingAutomationRule.conditions.contains[0].pattern) && (
+                  <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                    正则语法错误
+                  </Typography.Text>
+                )}
             </div>
           </div>
           <div className="automation-editor-section">
@@ -574,7 +539,7 @@ export function ConversationSidebar({
                   })
                 }}
               >
-                输出指定文本
+                流式输出
               </Button>
               <Button
                 type={editingAutomationRule?.action.type === 'complete' ? 'primary' : 'default'}
@@ -607,6 +572,62 @@ export function ConversationSidebar({
               >
                 返回 error
               </Button>
+              <Button
+                type={editingAutomationRule?.action.type === 'tool_call' ? 'primary' : 'default'}
+                onClick={() => {
+                  if (!editingAutomationRule) return
+                  setEditingAutomationRule({
+                    ...editingAutomationRule,
+                    action: {
+                      ...editingAutomationRule.action,
+                      type: 'tool_call',
+                    },
+                  })
+                  openToolCallModal()
+                }}
+              >
+                工具调用
+              </Button>
+            </div>
+            <div className="automation-editor-grid" style={{ marginTop: 12 }}>
+              <div className="automation-editor-inline-field">
+                <Typography.Text className="prune-input-label">收到后延时（秒）</Typography.Text>
+                <InputNumber
+                  min={0}
+                  value={editingAutomationRule?.timing.delay_seconds ?? 0}
+                  onChange={(value) => {
+                    if (!editingAutomationRule) return
+                    setEditingAutomationRule({
+                      ...editingAutomationRule,
+                      timing: {
+                        ...editingAutomationRule.timing,
+                        delay_seconds: typeof value === 'number' ? value : 0,
+                      },
+                    })
+                  }}
+                  className="prune-input"
+                />
+              </div>
+              {editingAutomationRule?.action.type === 'output_text' && (
+                <div className="automation-editor-inline-field">
+                  <Typography.Text className="prune-input-label">每隔时间重复（秒）</Typography.Text>
+                  <InputNumber
+                    min={0}
+                    value={editingAutomationRule?.timing.repeat_interval_seconds ?? 0}
+                    onChange={(value) => {
+                      if (!editingAutomationRule) return
+                      setEditingAutomationRule({
+                        ...editingAutomationRule,
+                        timing: {
+                          ...editingAutomationRule.timing,
+                          repeat_interval_seconds: typeof value === 'number' ? value : 0,
+                        },
+                      })
+                    }}
+                    className="prune-input"
+                  />
+                </div>
+              )}
             </div>
             {editingAutomationRule?.action.type === 'output_text' ? (
               <div className="automation-editor-action-field">
@@ -668,7 +689,125 @@ export function ConversationSidebar({
                 />
               </div>
             ) : null}
+            {editingAutomationRule?.action.type === 'tool_call' ? (
+              <div className="automation-editor-action-field">
+                <Typography.Text className="prune-input-label">工具调用配置</Typography.Text>
+                <Card
+                  size="small"
+                  style={{ marginTop: 8 }}
+                  extra={
+                    <Button size="small" onClick={openToolCallModal}>
+                      编辑
+                    </Button>
+                  }
+                >
+                  <Typography.Text>
+                    {editingAutomationRule.action.tool_name
+                      ? `Tool: ${editingAutomationRule.action.tool_name}`
+                      : '未配置工具调用'}
+                  </Typography.Text>
+                </Card>
+              </div>
+            ) : null}
           </div>
+        </Space>
+      </Modal>
+      <Modal
+        title="编辑工具调用"
+        width={680}
+        open={toolCallModalOpen}
+        onCancel={() => setToolCallModalOpen(false)}
+        onOk={handleToolCallModalOk}
+        okText="确认"
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div>
+            <Typography.Text className="prune-input-label">选择历史会话（获取 Tool Schema）</Typography.Text>
+            <Select
+              value={toolCallSchemaConversationId || undefined}
+              onChange={(value) => setToolCallSchemaConversationId(value)}
+              placeholder="选择一个会话以加载其 tool schema"
+              style={{ width: '100%' }}
+              showSearch
+              optionFilterProp="label"
+              options={conversations.map((c) => ({
+                label: c.title || c.id,
+                value: c.id,
+              }))}
+            />
+          </div>
+          {toolCallSchemasLoading && <Spin size="small" />}
+          {!toolCallSchemasLoading && toolCallSchemaConversationId && toolCallSchemas.length === 0 && (
+            <Typography.Text type="secondary">该会话中没有可用的 tool schema</Typography.Text>
+          )}
+          {toolCallSchemas.length > 0 && (
+            <>
+              <div>
+                <Typography.Text className="prune-input-label">选择 Tool</Typography.Text>
+                <Select
+                  value={toolCallToolName || undefined}
+                  onChange={(value) => {
+                    setToolCallToolName(value)
+                    const schema = toolCallSchemas.find((s) => s.name === value)
+                    setToolCallFormValues(schema ? buildInitialToolFormValues(schema.parameters) : {})
+                  }}
+                  placeholder="选择一个 tool"
+                  style={{ width: '100%' }}
+                  options={toolCallSchemas.map((s) => ({
+                    label: s.name,
+                    value: s.name,
+                  }))}
+                />
+              </div>
+              <div>
+                <Typography.Text className="prune-input-label">Tool Call ID（可留空自动生成）</Typography.Text>
+                <Input
+                  value={toolCallId}
+                  onChange={(event) => setToolCallId(event.target.value)}
+                  placeholder="tool call id"
+                />
+              </div>
+              {(() => {
+                const selectedSchema = toolCallSchemas.find((s) => s.name === toolCallToolName)
+                if (!selectedSchema) return null
+                const properties = selectedSchema.parameters?.properties ?? {}
+                const requiredFields = selectedSchema.parameters?.required ?? []
+                const entries = Object.entries(properties)
+                return (
+                  <Card size="small" title={selectedSchema.name}>
+                    {selectedSchema.description && (
+                      <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                        {selectedSchema.description}
+                      </Typography.Text>
+                    )}
+                    {entries.length > 0 ? (
+                      <div className="tool-form-grid">
+                        {entries.map(([fieldName, schema]) => (
+                          <ToolField
+                            key={fieldName}
+                            disabled={false}
+                            fieldName={fieldName}
+                            onChange={(nextField, nextValue) =>
+                              setToolCallFormValues((prev) => ({
+                                ...prev,
+                                [nextField]: nextValue,
+                              }))
+                            }
+                            required={requiredFields.includes(fieldName)}
+                            schema={schema}
+                            value={toolCallFormValues[fieldName]}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <Typography.Text type="secondary">该 tool 没有参数</Typography.Text>
+                    )}
+                  </Card>
+                )
+              })()}
+            </>
+          )}
         </Space>
       </Modal>
     </div>

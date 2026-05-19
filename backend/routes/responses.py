@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from flask import Flask, jsonify, request
 
-from ..core import AppDependencies
+from ..core import AppDependencies, settings
 from ..services.response_stream import (
     client_disconnected,
     discard_pending_turn,
@@ -188,4 +188,12 @@ def register_response_routes(app: Flask, *, deps: AppDependencies) -> None:
         return {
             "ok": True,
             "public_statistics": public_statistics,
+        }
+
+    @app.get("/api/config/app-info")
+    @auth.require_auth
+    def get_app_info():
+        return {
+            "ok": True,
+            "api_key": settings.api_key,
         }

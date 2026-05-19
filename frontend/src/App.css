@@ -1151,6 +1151,22 @@
   gap: 16px;
 }
 
+.automation-editor-inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.automation-editor-inline-field .prune-input-label {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.automation-editor-inline-field .prune-input {
+  flex: 1;
+  min-width: 0;
+}
+
 .automation-condition-list {
   display: grid;
   gap: 10px;
@@ -1504,6 +1520,18 @@
 
 .message-debug-block {
   margin-top: 10px;
+}
+
+.message-debug-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-curl-btn {
+  font-size: 11px !important;
+  padding: 0 !important;
+  height: auto !important;
 }
 
 .message-debug-block pre {
