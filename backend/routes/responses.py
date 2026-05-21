@@ -186,6 +186,7 @@ def register_response_routes(app: Flask, *, deps: AppDependencies) -> None:
         return {
             "ok": True,
             **snapshot,
+            "image_usage": deps.image_store.storage_usage(deps.store.iter_messages()),
             "email_provider_options": available_email_providers,
         }
 
@@ -209,6 +210,7 @@ def register_response_routes(app: Flask, *, deps: AppDependencies) -> None:
         return {
             "ok": True,
             **system_config_store.get_system_config_snapshot(),
+            "image_usage": deps.image_store.storage_usage(deps.store.iter_messages()),
             "email_provider_options": available_email_providers,
         }
 

@@ -212,6 +212,18 @@ export type SystemConfig = {
   registration_email_domain_restriction_enabled: boolean
   registration_email_domains: string
   api_key_limit_per_user: number
+  realtime_max_connections: number
+  realtime_max_connections_per_user: number
+  realtime_queue_size: number
+  image_max_single_bytes: number
+  image_max_request_bytes: number
+  image_max_total_bytes: number
+  image_usage?: {
+    total_bytes: number
+    file_count: number
+    orphan_bytes: number
+    orphan_count: number
+  }
 }
 
 export type RegisterConfig = {
@@ -232,13 +244,12 @@ export type PasswordResetConfig = {
 export type WorkspaceSnapshotEvent = {
   type: 'snapshot'
   conversations: Conversation[]
-  messages_by_conversation: Record<string, MessageItem[]>
 }
 
 export type WorkspaceConversationUpsertEvent = {
   type: 'conversation_upsert'
   conversation: Conversation
-  messages: MessageItem[]
+  messages?: MessageItem[]
 }
 
 export type WorkspaceConversationDeleteEvent = {

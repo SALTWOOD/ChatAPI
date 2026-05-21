@@ -46,7 +46,7 @@ def create_app() -> Flask:
     auth = AuthContext(store, user_store)
     pending_turns = PendingTurnRegistry()
     message_rate_limiter = MessageRateLimiter()
-    image_store = ImageAssetStore(settings.uploads_img_dir)
+    image_store = ImageAssetStore(settings.uploads_img_dir, system_config_store=system_config_store)
     realtime = RealtimeBroker(store, user_store)
     deps = AppDependencies(
         settings=settings,

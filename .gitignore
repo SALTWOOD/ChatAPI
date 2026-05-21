@@ -56,5 +56,6 @@ Thumbs.db
 oai_response.txt
 deploy_rsync.sh
 backup.sh
-
+install_systemd_user.sh
+uninstall_systemd_user.sh
 certs/

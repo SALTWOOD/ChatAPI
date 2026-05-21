@@ -5,9 +5,11 @@ import { appMessage } from '../lib/antdApp'
 import {
   buildInitialToolFormValues,
   getLastToolSchemas,
-  normalizeToolFieldValue,
 } from '../lib/chat-format'
 import { buildVisibleMessages } from '../lib/visibleMessages'
+import { buildToolCallPayload } from './chatWorkspace/buildToolCallPayload'
+import { DEFAULT_AUTH_SESSION } from './chatWorkspace/defaultAuthSession'
+import { useConversationMessages } from './chatWorkspace/useConversationMessages'
 import { useAutomationRules } from './useAutomationRules'
 import { useKeyboardOffset } from './useKeyboardOffset'
 import { useWorkspaceRealtime } from './useWorkspaceRealtime'
@@ -23,18 +25,12 @@ import type {
 
 export function useChatWorkspace(isMobile: boolean) {
   const [booting, setBooting] = useState(true)
-  const [auth, setAuth] = useState<AuthSession>({
-    authenticated: false,
-    user: null,
-    totp_enabled: false,
-    registration_enabled: false,
-    geetest_enabled: false,
-    geetest_captcha_id: '',
-  })
+  const [auth, setAuth] = useState<AuthSession>(DEFAULT_AUTH_SESSION)
   const [loginLoading, setLoginLoading] = useState(false)
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [selectedConversationId, setSelectedConversationId] = useState('')
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, MessageItem[]>>({})
+  const [loadedConversationIds, setLoadedConversationIds] = useState<Set<string>>(() => new Set())
   const [messagesLoading, setMessagesLoading] = useState(true)
   const [composer, setComposer] = useState('')
   const [composerMode, setComposerMode] = useState<ComposerMode>('assistant_message')
@@ -62,6 +58,7 @@ export function useChatWorkspace(isMobile: boolean) {
     selectedConversationId,
     setConversations,
     setDraftBuffers,
+    setLoadedConversationIds,
     setMessagesByConversation,
     setMessagesLoading,
     setSelectedConversationId,
@@ -122,6 +119,15 @@ export function useChatWorkspace(isMobile: boolean) {
     }
   }, [])
 
+  useConversationMessages({
+    authenticated: auth.authenticated,
+    loadedConversationIds,
+    selectedConversationId,
+    setLoadedConversationIds,
+    setMessagesByConversation,
+    setMessagesLoading,
+  })
+
   useEffect(() => {
     if (composerMode !== 'tool_call') return
     if (toolName && selectedToolSchema) return
@@ -156,18 +162,12 @@ export function useChatWorkspace(isMobile: boolean) {
     try {
       await requestJson('/api/auth/logout', { method: 'POST' })
     } finally {
-      setAuth({
-        authenticated: false,
-        user: null,
-        totp_enabled: false,
-        registration_enabled: false,
-        geetest_enabled: false,
-        geetest_captcha_id: '',
-      })
+      setAuth(DEFAULT_AUTH_SESSION)
       setTotpEnabled(false)
       setConversations([])
       setSelectedConversationId('')
       setMessagesByConversation({})
+      setLoadedConversationIds(new Set())
       setMessagesLoading(false)
       setComposer('')
       setComposerMode('assistant_message')
@@ -312,25 +312,6 @@ export function useChatWorkspace(isMobile: boolean) {
     }
   }
 
-  function buildToolCallPayload(): string {
-    if (!toolName.trim()) {
-      throw new Error('请先选择一个 tool')
-    }
-    const properties = selectedToolSchema?.parameters?.properties ?? {}
-    const required = new Set(selectedToolSchema?.parameters?.required ?? [])
-    const payloadEntries = Object.entries(properties).flatMap(([key, schema]) => {
-      const rawValue = toolFormValues[key]
-      if (rawValue == null || rawValue === '') {
-        if (required.has(key)) {
-          throw new Error(`请填写必填参数: ${key}`)
-        }
-        return []
-      }
-      return [[key, normalizeToolFieldValue(rawValue, schema)] as const]
-    })
-    return JSON.stringify(Object.fromEntries(payloadEntries))
-  }
-
   async function handleSend(options?: {
     resetMode?: boolean
     successMessage?: string
@@ -341,7 +322,11 @@ export function useChatWorkspace(isMobile: boolean) {
         ? ''
         : (() => {
             try {
-              return buildToolCallPayload()
+              return buildToolCallPayload({
+                selectedToolSchema,
+                toolFormValues,
+                toolName,
+              })
             } catch (error) {
               appMessage.error(error instanceof Error ? error.message : '工具参数格式错误')
               return ''

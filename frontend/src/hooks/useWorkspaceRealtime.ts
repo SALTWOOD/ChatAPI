@@ -24,6 +24,7 @@ type UseWorkspaceRealtimeParams = {
   setConversations: Dispatch<SetStateAction<Conversation[]>>
   setDraftBuffers: Dispatch<SetStateAction<Record<string, string>>>
   setMessagesByConversation: Dispatch<SetStateAction<Record<string, MessageItem[]>>>
+  setLoadedConversationIds: Dispatch<SetStateAction<Set<string>>>
   setMessagesLoading: Dispatch<SetStateAction<boolean>>
   setSelectedConversationId: Dispatch<SetStateAction<string>>
 }
@@ -35,6 +36,7 @@ export function useWorkspaceRealtime({
   setConversations,
   setDraftBuffers,
   setMessagesByConversation,
+  setLoadedConversationIds,
   setMessagesLoading,
   setSelectedConversationId,
 }: UseWorkspaceRealtimeParams) {
@@ -100,6 +102,7 @@ export function useWorkspaceRealtime({
     function connect() {
       const socket = new WebSocket(resolveWebSocketUrl('/api/ws'))
       socketRef.current = socket
+      setMessagesLoading(true)
 
       socket.addEventListener('message', (event) => {
         if (!active) return
@@ -107,12 +110,14 @@ export function useWorkspaceRealtime({
           | WorkspaceSnapshotEvent
           | WorkspaceConversationUpsertEvent
           | WorkspaceConversationDeleteEvent
+          | { type: 'disconnect'; reason?: string }
           | { type: 'ping' }
         try {
           payload = JSON.parse(event.data) as
             | WorkspaceSnapshotEvent
             | WorkspaceConversationUpsertEvent
             | WorkspaceConversationDeleteEvent
+            | { type: 'disconnect'; reason?: string }
             | { type: 'ping' }
         } catch {
           return
@@ -120,12 +125,14 @@ export function useWorkspaceRealtime({
         if (payload.type === 'ping') {
           return
         }
+        if (payload.type === 'disconnect') {
+          socket.close()
+          return
+        }
 
         if (payload.type === 'snapshot') {
           const nextConversations = sortConversations(payload.conversations)
           setConversations(nextConversations)
-          setMessagesByConversation(payload.messages_by_conversation)
-          setMessagesLoading(false)
           applySelectedConversation(resolvePreferredConversationId(nextConversations))
           return
         }
@@ -141,10 +148,24 @@ export function useWorkspaceRealtime({
           conversationsRef.current = nextConversations
           setConversations(nextConversations)
           applySelectedConversation(resolvePreferredConversationId(nextConversations))
-          setMessagesByConversation((current) => ({
-            ...current,
-            [payload.conversation.id]: payload.messages,
-          }))
+          if (payload.messages) {
+            setMessagesByConversation((current) => ({
+              ...current,
+              [payload.conversation.id]: payload.messages ?? [],
+            }))
+            setLoadedConversationIds((current) => {
+              const next = new Set(current)
+              next.add(payload.conversation.id)
+              return next
+            })
+          } else {
+            setLoadedConversationIds((current) => {
+              if (!current.has(payload.conversation.id)) return current
+              const next = new Set(current)
+              next.delete(payload.conversation.id)
+              return next
+            })
+          }
           return
         }
 

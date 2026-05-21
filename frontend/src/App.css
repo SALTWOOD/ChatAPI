@@ -1270,6 +1270,17 @@
 
 .system-settings-compact {
   width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+  padding: 4px 12px;
+  box-sizing: border-box;
+}
+
+.system-settings-compact .ant-input-number {
+  width: 100%;
+  min-width: 0;
 }
 
 .system-settings-number-input {
@@ -2225,6 +2236,34 @@ body.image-preview-open {
 
 .login-form {
   margin-top: 8px;
+}
+
+.register-email-group {
+  display: flex;
+  width: 100%;
+}
+
+.register-email-input {
+  width: calc(100% - 146px) !important;
+}
+
+.register-email-domain {
+  width: 146px;
+}
+
+.register-email-input .ant-input,
+.register-email-domain .ant-select-selector {
+  border-radius: 0 !important;
+}
+
+.register-email-input .ant-input {
+  border-start-start-radius: 10px !important;
+  border-end-start-radius: 10px !important;
+}
+
+.register-email-domain .ant-select-selector {
+  border-start-end-radius: 10px !important;
+  border-end-end-radius: 10px !important;
 }
 
 .login-register-row {

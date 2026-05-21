@@ -71,6 +71,26 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _assistant_request_content(item: dict[str, Any]) -> str:
+    tool_calls = item.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        first_call = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+        function_payload = (
+            first_call.get("function")
+            if isinstance(first_call, dict) and isinstance(first_call.get("function"), dict)
+            else {}
+        )
+        tool_name = str(function_payload.get("name", "")).strip()
+        arguments = serialize_content(function_payload.get("arguments", ""))
+        if tool_name:
+            return f"{tool_name}({arguments})"
+        return serialize_content(tool_calls)
+    content = item.get("content")
+    if content is None:
+        return ""
+    return serialize_content(content)
+
+
 def extract_text_content(node: Any) -> str:
     parts: list[str] = []
 
@@ -245,6 +265,34 @@ def extract_request_messages(
                     }
                 )
             continue
+        if role == "assistant":
+            content = _assistant_request_content(item)
+            if content:
+                metadata: dict[str, Any] = {
+                    "source": request_format,
+                    "turn": "assistant",
+                    "history_imported": True,
+                }
+                tool_calls = item.get("tool_calls")
+                if isinstance(tool_calls, list) and tool_calls:
+                    metadata["response_mode"] = "tool_call"
+                    first_call = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+                    function_payload = (
+                        first_call.get("function")
+                        if isinstance(first_call, dict) and isinstance(first_call.get("function"), dict)
+                        else {}
+                    )
+                    metadata["tool_call_id"] = str(first_call.get("id", "")).strip()
+                    metadata["tool_name"] = str(function_payload.get("name", "")).strip()
+                    metadata["arguments"] = serialize_content(function_payload.get("arguments", ""))
+                extracted.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                        "metadata": metadata,
+                    }
+                )
+            continue
         if request_format == "chat_completions" and role == "tool":
             output = serialize_content(item.get("content"))
             call_id = str(item.get("tool_call_id", "")).strip()
@@ -291,6 +339,75 @@ def extract_request_messages(
                     }
                 )
     return extracted
+
+
+def extract_comparable_request_messages(data: dict[str, Any], request_format: str) -> list[dict[str, str]]:
+    payload = request_input_payload(data, request_format)
+    items = payload if isinstance(payload, list) else [payload]
+    comparable: list[dict[str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip()
+        item_type = str(item.get("type", "")).strip()
+        if role in {"system", "developer"}:
+            continue
+        if request_format == "anthropic_messages" and role == "user":
+            content_blocks = item.get("content")
+            content = serialize_content(content_blocks)
+            if content:
+                comparable.append(
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                )
+            if not isinstance(content_blocks, list):
+                continue
+            for content_block in content_blocks:
+                if not isinstance(content_block, dict):
+                    continue
+                if str(content_block.get("type", "")).strip() != "tool_result":
+                    continue
+                content = serialize_content(content_block.get("content"))
+                if content:
+                    comparable.append(
+                        {
+                            "role": "tool",
+                            "content": content,
+                        }
+                    )
+            continue
+        if role in {"user", "assistant"}:
+            content = _assistant_request_content(item) if role == "assistant" else serialize_content(item.get("content"))
+            if content:
+                comparable.append(
+                    {
+                        "role": role,
+                        "content": content,
+                    }
+                )
+            continue
+        if request_format == "chat_completions" and role == "tool":
+            content = serialize_content(item.get("content"))
+            if content:
+                comparable.append(
+                    {
+                        "role": "tool",
+                        "content": content,
+                    }
+                )
+            continue
+        if item_type == "function_call_output":
+            content = serialize_content(item.get("output", ""))
+            if content:
+                comparable.append(
+                    {
+                        "role": "tool",
+                        "content": content,
+                    }
+                )
+    return comparable
 
 
 def extract_tool_result_call_ids(data: dict[str, Any], request_format: str) -> list[str]:
@@ -345,6 +462,11 @@ def resolve_conversation_for_request(
         conversation = store.find_conversation_by_tool_call_id(owner, call_id)
         if conversation is not None:
             return conversation, None
+
+    comparable_messages = extract_comparable_request_messages(data, request_format)
+    conversation = store.find_conversation_by_message_history(owner, comparable_messages)
+    if conversation is not None:
+        return conversation, None
 
     return None, None
 

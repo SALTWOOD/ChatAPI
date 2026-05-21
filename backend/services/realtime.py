@@ -11,7 +11,8 @@ from ..repositories import ConversationStore, UserStore
 @dataclass
 class RealtimeSubscription:
     owner_id: str
-    events: queue.Queue[dict[str, Any]] = field(default_factory=queue.Queue)
+    events: queue.Queue[dict[str, Any]] = field(default_factory=lambda: queue.Queue(maxsize=100))
+    closed: threading.Event = field(default_factory=threading.Event)
 
 
 class RealtimeBroker:
@@ -21,15 +22,77 @@ class RealtimeBroker:
         self._lock = threading.Lock()
         self._subscriptions_by_owner: dict[str, list[RealtimeSubscription]] = {}
 
+    @staticmethod
+    def _normalize_limit(value: Any, default: int = 0) -> int:
+        try:
+            return max(0, int(value or default))
+        except (TypeError, ValueError):
+            return default
+
     def subscribe(
         self,
         owner_id: str,
+        *,
+        max_connections: int = 0,
+        max_connections_per_user: int = 0,
+        queue_size: int = 100,
     ) -> RealtimeSubscription:
-        subscription = RealtimeSubscription(owner_id=owner_id)
+        queue_size = max(1, self._normalize_limit(queue_size, 100))
+        subscription = RealtimeSubscription(
+            owner_id=owner_id,
+            events=queue.Queue(maxsize=queue_size),
+        )
         with self._lock:
+            self._enforce_limits_locked(
+                owner_id,
+                max_connections=max_connections,
+                max_connections_per_user=max_connections_per_user,
+            )
             subscribers = self._subscriptions_by_owner.setdefault(owner_id, [])
             subscribers.append(subscription)
         return subscription
+
+    def _enforce_limits_locked(
+        self,
+        owner_id: str,
+        *,
+        max_connections: int,
+        max_connections_per_user: int,
+    ) -> None:
+        max_connections = self._normalize_limit(max_connections)
+        max_connections_per_user = self._normalize_limit(max_connections_per_user)
+
+        if max_connections_per_user > 0:
+            subscribers = self._subscriptions_by_owner.get(owner_id, [])
+            while len(subscribers) >= max_connections_per_user:
+                oldest = subscribers.pop(0)
+                oldest.closed.set()
+                self._force_event(oldest, {"type": "disconnect", "reason": "connection_limit"})
+            if subscribers:
+                self._subscriptions_by_owner[owner_id] = subscribers
+            else:
+                self._subscriptions_by_owner.pop(owner_id, None)
+
+        if max_connections <= 0:
+            return
+        while self._connection_count_locked() >= max_connections:
+            oldest_owner = ""
+            oldest_subscription: RealtimeSubscription | None = None
+            for candidate_owner, subscribers in self._subscriptions_by_owner.items():
+                if subscribers:
+                    oldest_owner = candidate_owner
+                    oldest_subscription = subscribers[0]
+                    break
+            if oldest_subscription is None:
+                return
+            self._subscriptions_by_owner[oldest_owner].pop(0)
+            if not self._subscriptions_by_owner[oldest_owner]:
+                self._subscriptions_by_owner.pop(oldest_owner, None)
+            oldest_subscription.closed.set()
+            self._force_event(oldest_subscription, {"type": "disconnect", "reason": "connection_limit"})
+
+    def _connection_count_locked(self) -> int:
+        return sum(len(items) for items in self._subscriptions_by_owner.values())
 
     def unsubscribe(self, subscription: RealtimeSubscription) -> None:
         with self._lock:
@@ -46,6 +109,10 @@ class RealtimeBroker:
         with self._lock:
             return len(self._subscriptions_by_owner.get(owner_id, ()))
 
+    def count_connections(self) -> int:
+        with self._lock:
+            return self._connection_count_locked()
+
     def publish_snapshot(self, owner_id: str) -> None:
         self._publish(owner_id, self.build_snapshot(owner_id))
 
@@ -54,19 +121,11 @@ class RealtimeBroker:
         if conversation is None:
             self.publish_conversation_delete(owner_id, conversation_id)
             return
-        try:
-            messages = [
-                item.to_dict()
-                for item in self._store.get_messages(conversation_id, owner_id)
-            ]
-        except ValueError:
-            messages = []
         self._publish(
             owner_id,
             {
                 "type": "conversation_upsert",
                 "conversation": conversation.to_dict(),
-                "messages": messages,
             },
         )
 
@@ -83,28 +142,41 @@ class RealtimeBroker:
         with self._lock:
             subscribers = tuple(self._subscriptions_by_owner.get(owner_id, ()))
         for subscription in subscribers:
+            self._offer_event(subscription, event)
+
+    @staticmethod
+    def _offer_event(subscription: RealtimeSubscription, event: dict[str, Any]) -> None:
+        try:
             subscription.events.put_nowait(event)
+            return
+        except queue.Full:
+            pass
+        try:
+            subscription.events.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            subscription.events.put_nowait(event)
+        except queue.Full:
+            subscription.closed.set()
+
+    @staticmethod
+    def _force_event(subscription: RealtimeSubscription, event: dict[str, Any]) -> None:
+        while True:
+            try:
+                subscription.events.put_nowait(event)
+                return
+            except queue.Full:
+                try:
+                    subscription.events.get_nowait()
+                except queue.Empty:
+                    return
 
     def build_snapshot(
         self,
         owner_id: str,
     ) -> dict[str, Any]:
-        conversations = self._store.list_conversations(owner_id)
-        messages_by_conversation: dict[str, list[dict[str, Any]]] = {}
-        for conversation in conversations:
-            try:
-                messages_by_conversation[conversation.id] = [
-                    item.to_dict()
-                    for item in self._store.get_messages(
-                        conversation.id,
-                        owner_id,
-                    )
-                ]
-            except ValueError:
-                messages_by_conversation[conversation.id] = []
-
         return {
             "type": "snapshot",
-            "conversations": [item.to_dict() for item in conversations],
-            "messages_by_conversation": messages_by_conversation,
+            "conversations": [item.to_dict() for item in self._store.list_conversations(owner_id)],
         }

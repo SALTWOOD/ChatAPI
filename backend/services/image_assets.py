@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..repositories import SystemConfigStore
+
 
 _DATA_IMAGE_RE = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$", re.IGNORECASE | re.DOTALL)
 
@@ -127,9 +129,16 @@ def _decode_base64_image(value: str, *, mime_type_hint: str | None = None) -> tu
 
 
 class ImageAssetStore:
-    def __init__(self, base_dir: Path, route_prefix: str = "/api/uploads/imgs"):
+    def __init__(
+        self,
+        base_dir: Path,
+        route_prefix: str = "/api/uploads/imgs",
+        system_config_store: SystemConfigStore | None = None,
+    ):
         self.base_dir = base_dir
         self.route_prefix = route_prefix.rstrip("/")
+        self.system_config_store = system_config_store
+        self._request_bytes = 0
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -144,18 +153,50 @@ class ImageAssetStore:
         ext = _mime_to_extension(mime_type)
         return f"{digest}.{ext}"
 
+    def _config_int(self, key: str, default: int = 0) -> int:
+        if self.system_config_store is None:
+            return default
+        try:
+            return max(0, int(self.system_config_store.get_system_config(key, str(default)) or default))
+        except ValueError:
+            return default
+
+    def _placeholder_for_expired(self, filename: str) -> str:
+        return f"{self.route_root}/{filename}"
+
+    def _can_store(self, image_bytes: bytes) -> bool:
+        size = len(image_bytes)
+        single_limit = self._config_int("value.image_max_single_bytes", 0)
+        if single_limit > 0 and size > single_limit:
+            return False
+
+        request_limit = self._config_int("value.image_max_request_bytes", 0)
+        if request_limit > 0 and self._request_bytes + size > request_limit:
+            return False
+
+        total_limit = self._config_int("value.image_max_total_bytes", 0)
+        if total_limit > 0:
+            self.prune_oldest_to_fit(max(0, total_limit - size))
+            if self.storage_usage()["total_bytes"] + size > total_limit:
+                return False
+        return True
+
     def store_data_url(self, value: str) -> str | None:
         decoded = _decode_base64_image(value)
         if decoded is None:
             return None
         image_bytes, mime_type = decoded
         filename = self._filename_for(image_bytes, mime_type)
+        if not self._can_store(image_bytes):
+            return self._placeholder_for_expired(filename)
         path = self.base_dir / filename
         if not path.exists():
             path.write_bytes(image_bytes)
+        self._request_bytes += len(image_bytes)
         return self.public_url(filename)
 
     def normalize_request_data(self, value: Any) -> Any:
+        self._request_bytes = 0
         return self._normalize_node(value)
 
     def _rewrite_string(self, value: str, *, key: str = "") -> str:
@@ -167,9 +208,12 @@ class ImageAssetStore:
         if decoded is not None:
             image_bytes, mime_type = decoded
             filename = self._filename_for(image_bytes, mime_type)
+            if not self._can_store(image_bytes):
+                return self._placeholder_for_expired(filename)
             path = self.base_dir / filename
             if not path.exists():
                 path.write_bytes(image_bytes)
+            self._request_bytes += len(image_bytes)
             return self.public_url(filename)
 
         if _is_image_key(key):
@@ -177,9 +221,12 @@ class ImageAssetStore:
             if decoded is not None:
                 image_bytes, mime_type = decoded
                 filename = self._filename_for(image_bytes, mime_type)
+                if not self._can_store(image_bytes):
+                    return self._placeholder_for_expired(filename)
                 path = self.base_dir / filename
                 if not path.exists():
                     path.write_bytes(image_bytes)
+                self._request_bytes += len(image_bytes)
                 return self.public_url(filename)
         return value
 
@@ -238,5 +285,64 @@ class ImageAssetStore:
             if path.name in referenced:
                 continue
             path.unlink(missing_ok=True)
+            deleted.append(path.name)
+        return deleted
+
+    def storage_usage(self, messages: list[Any] | None = None) -> dict[str, int]:
+        total_bytes = 0
+        file_count = 0
+        orphan_bytes = 0
+        referenced: set[str] | None = None
+        if messages is not None:
+            referenced = set()
+            for message in messages:
+                content = getattr(message, "content", "")
+                if isinstance(content, str):
+                    referenced.update(self.referenced_filenames(content))
+
+        if not self.base_dir.exists():
+            return {
+                "total_bytes": 0,
+                "file_count": 0,
+                "orphan_bytes": 0,
+                "orphan_count": 0,
+            }
+
+        orphan_count = 0
+        for path in self.base_dir.iterdir():
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+            total_bytes += size
+            file_count += 1
+            if referenced is not None and path.name not in referenced:
+                orphan_bytes += size
+                orphan_count += 1
+
+        return {
+            "total_bytes": total_bytes,
+            "file_count": file_count,
+            "orphan_bytes": orphan_bytes,
+            "orphan_count": orphan_count,
+        }
+
+    def prune_oldest_to_fit(self, target_bytes: int) -> list[str]:
+        target_bytes = max(0, int(target_bytes))
+        files = [
+            path
+            for path in self.base_dir.iterdir()
+            if path.is_file()
+        ] if self.base_dir.exists() else []
+        total = sum(path.stat().st_size for path in files)
+        if total <= target_bytes:
+            return []
+
+        deleted: list[str] = []
+        for path in sorted(files, key=lambda item: item.stat().st_mtime):
+            if total <= target_bytes:
+                break
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            total -= size
             deleted.append(path.name)
         return deleted

@@ -100,6 +100,12 @@ class SystemConfigStore:
             api_key_limit_per_user = max(0, int(api_key_limit_raw or "0"))
         except ValueError:
             api_key_limit_per_user = 0
+        realtime_max_connections = self._get_non_negative_int("value.realtime_max_connections", 0)
+        realtime_max_connections_per_user = self._get_non_negative_int("value.realtime_max_connections_per_user", 0)
+        realtime_queue_size = self._get_positive_int("value.realtime_queue_size", 100)
+        image_max_single_bytes = self._get_non_negative_int("value.image_max_single_bytes", 0)
+        image_max_request_bytes = self._get_non_negative_int("value.image_max_request_bytes", 0)
+        image_max_total_bytes = self._get_non_negative_int("value.image_max_total_bytes", 0)
         return {
             "public_statistics": self.get_system_config_flag("public_statistics", False),
             "title_enabled": self.get_system_config_flag("flag.title", False),
@@ -119,7 +125,25 @@ class SystemConfigStore:
             ),
             "registration_email_domains": self.get_system_config("value.registration_email_domains", ""),
             "api_key_limit_per_user": api_key_limit_per_user,
+            "realtime_max_connections": realtime_max_connections,
+            "realtime_max_connections_per_user": realtime_max_connections_per_user,
+            "realtime_queue_size": realtime_queue_size,
+            "image_max_single_bytes": image_max_single_bytes,
+            "image_max_request_bytes": image_max_request_bytes,
+            "image_max_total_bytes": image_max_total_bytes,
         }
+
+    def _get_non_negative_int(self, key: str, default: int) -> int:
+        try:
+            return max(0, int(self.get_system_config(key, str(default)) or default))
+        except ValueError:
+            return default
+
+    def _get_positive_int(self, key: str, default: int) -> int:
+        try:
+            return max(1, int(self.get_system_config(key, str(default)) or default))
+        except ValueError:
+            return default
 
     def update_system_config_snapshot(self, data: dict[str, Any]) -> None:
         registration_email_domain_restriction_enabled = bool(
@@ -131,6 +155,38 @@ class SystemConfigStore:
             raise ValueError("每个账号 API Key 数量上限必须是大于等于 0 的整数") from exc
         if api_key_limit_per_user < 0:
             raise ValueError("每个账号 API Key 数量上限必须是大于等于 0 的整数")
+        realtime_max_connections = self._normalize_non_negative_config_int(
+            data,
+            "realtime_max_connections",
+            "全局最大实时连接数必须是大于等于 0 的整数",
+        )
+        realtime_max_connections_per_user = self._normalize_non_negative_config_int(
+            data,
+            "realtime_max_connections_per_user",
+            "单用户最大实时连接数必须是大于等于 0 的整数",
+        )
+        realtime_queue_size = self._normalize_non_negative_config_int(
+            data,
+            "realtime_queue_size",
+            "单连接事件队列上限必须是大于 0 的整数",
+        )
+        if realtime_queue_size <= 0:
+            raise ValueError("单连接事件队列上限必须是大于 0 的整数")
+        image_max_single_bytes = self._normalize_non_negative_config_int(
+            data,
+            "image_max_single_bytes",
+            "单张图片大小上限必须是大于等于 0 的整数",
+        )
+        image_max_request_bytes = self._normalize_non_negative_config_int(
+            data,
+            "image_max_request_bytes",
+            "单次请求图片大小上限必须是大于等于 0 的整数",
+        )
+        image_max_total_bytes = self._normalize_non_negative_config_int(
+            data,
+            "image_max_total_bytes",
+            "图片总容量上限必须是大于等于 0 的整数",
+        )
         if registration_email_domain_restriction_enabled:
             registration_email_domains = self._normalize_registration_email_domains(
                 str(data.get("registration_email_domains", "")),
@@ -167,6 +223,26 @@ class SystemConfigStore:
             "value.api_key_limit_per_user",
             str(api_key_limit_per_user),
         )
+        self.set_system_config("value.realtime_max_connections", str(realtime_max_connections))
+        self.set_system_config("value.realtime_max_connections_per_user", str(realtime_max_connections_per_user))
+        self.set_system_config("value.realtime_queue_size", str(realtime_queue_size))
+        self.set_system_config("value.image_max_single_bytes", str(image_max_single_bytes))
+        self.set_system_config("value.image_max_request_bytes", str(image_max_request_bytes))
+        self.set_system_config("value.image_max_total_bytes", str(image_max_total_bytes))
+
+    def _normalize_non_negative_config_int(
+        self,
+        data: dict[str, Any],
+        key: str,
+        message: str,
+    ) -> int:
+        try:
+            value = int(data.get(key, 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(message) from exc
+        if value < 0:
+            raise ValueError(message)
+        return value
 
     def get_effective_title(self, fallback: str = "") -> str:
         if not self.get_system_config_flag("flag.title", False):

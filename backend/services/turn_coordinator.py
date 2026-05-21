@@ -17,52 +17,20 @@ from .payload_openai import (
     estimate_usage,
 )
 from .pending import PendingTurn
+from .turn_request_tools import (
+    extract_tool_names,
+    extract_tool_schemas,
+    find_response_message_metadata,
+)
 from .turn_protocols import (
     build_message_debug_metadata,
+    extract_comparable_request_messages,
     extract_context_text,
     extract_request_messages,
     normalize_message_text,
     request_input_payload,
     resolve_conversation_for_request,
 )
-
-
-def _extract_tool_names(data: dict[str, Any]) -> set[str]:
-    raw_tools = data.get("tools")
-    if not isinstance(raw_tools, list):
-        return set()
-    names: set[str] = set()
-    for tool in raw_tools:
-        if not isinstance(tool, dict):
-            continue
-        func = tool.get("function")
-        if isinstance(func, dict):
-            name = func.get("name")
-        else:
-            name = tool.get("name")
-        if isinstance(name, str) and name.strip():
-            names.add(name.strip())
-    return names
-
-
-def _extract_tool_schemas(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    raw_tools = data.get("tools")
-    if not isinstance(raw_tools, list):
-        return {}
-    schemas: dict[str, dict[str, Any]] = {}
-    for tool in raw_tools:
-        if not isinstance(tool, dict):
-            continue
-        func = tool.get("function")
-        if isinstance(func, dict):
-            name = func.get("name")
-            parameters = func.get("parameters", {})
-        else:
-            name = tool.get("name")
-            parameters = tool.get("input_schema", {})
-        if isinstance(name, str) and name.strip():
-            schemas[name.strip()] = parameters if isinstance(parameters, dict) else {}
-    return schemas
 
 
 @dataclass(frozen=True)
@@ -196,6 +164,17 @@ class TurnCoordinator:
             owner=owner,
             request_format=request_format,
         )
+        comparable_messages = extract_comparable_request_messages(
+            normalized_data,
+            request_format,
+        )
+        history_prefix_length = self.store.get_request_history_prefix_length(
+            conversation.id,
+            owner,
+            comparable_messages,
+        )
+        if history_prefix_length > 0 and len(extracted_messages) >= history_prefix_length:
+            extracted_messages = extracted_messages[history_prefix_length:]
         has_tool_results = any(
             str(message_payload.get("metadata", {}).get("response_mode", "")).strip()
             == "tool_result"
@@ -222,8 +201,8 @@ class TurnCoordinator:
             model=model,
             input_text=context_text,
             request_format=request_format,
-            available_tool_names=_extract_tool_names(normalized_data),
-            available_tool_schemas=_extract_tool_schemas(normalized_data),
+            available_tool_names=extract_tool_names(normalized_data),
+            available_tool_schemas=extract_tool_schemas(normalized_data),
         )
         try:
             request_debug_metadata = build_message_debug_metadata(
@@ -290,15 +269,11 @@ class TurnCoordinator:
         if updated_conversation is None:
             raise ValueError("conversation not found")
         usage = estimate_usage(pending.input_text, pending.assistant_text)
-        message_metadata: dict[str, Any] = {}
         try:
             messages = self.store.get_messages(pending.conversation_id, pending.owner_id)
         except ValueError:
             messages = []
-        for message in reversed(messages):
-            if message.response_id == pending.response_id and message.role == "assistant":
-                message_metadata = message.metadata
-                break
+        message_metadata = find_response_message_metadata(messages, pending.response_id)
         tool_name = str(message_metadata.get("tool_name", "")).strip()
         tool_call_id = str(message_metadata.get("tool_call_id", "")).strip()
         arguments = str(message_metadata.get("arguments", "")).strip()

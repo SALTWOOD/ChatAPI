@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { Button, Card, Form, Input, Typography } from 'antd'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Card, Form, Input, Select, Typography } from 'antd'
 
 import { CosmicBackdrop } from './CosmicBackdrop'
 import { GeetestCaptchaField, type GeetestCaptcha } from './GeetestCaptchaField'
@@ -12,6 +12,8 @@ type RegistrationScreenProps = {
   onBackToLogin: () => void
 }
 
+const DEFAULT_EMAIL_DOMAINS = ['qq.com', 'gmail.com', '163.com', 'outlook.com', 'hotmail.com']
+
 export function RegistrationScreen({ onRegistered, onBackToLogin }: RegistrationScreenProps) {
   const [form] = Form.useForm()
   const [config, setConfig] = useState<RegisterConfig | null>(null)
@@ -19,6 +21,37 @@ export function RegistrationScreen({ onRegistered, onBackToLogin }: Registration
   const [sendingCode, setSendingCode] = useState(false)
   const [codeCountdown, setCodeCountdown] = useState(0)
   const captchaRef = useRef<GeetestCaptcha | null>(null)
+
+  const emailDomainOptions = useMemo(() => {
+    const configuredDomains = (config?.registration_email_domains ?? '')
+      .split(',')
+      .map((domain) => domain.trim().toLowerCase())
+      .filter(Boolean)
+    const domains = config?.registration_email_domain_restriction_enabled
+      ? configuredDomains
+      : Array.from(new Set([...configuredDomains, ...DEFAULT_EMAIL_DOMAINS]))
+    return domains.map((domain) => ({
+      label: `@${domain}`,
+      value: domain,
+    }))
+  }, [config])
+
+  useEffect(() => {
+    if (emailDomainOptions.length === 0) return
+    const currentDomain = form.getFieldValue('emailDomain') as string | undefined
+    if (!currentDomain || !emailDomainOptions.some((option) => option.value === currentDomain)) {
+      form.setFieldValue('emailDomain', emailDomainOptions[0]?.value)
+    }
+  }, [emailDomainOptions, form])
+
+  function buildEmailFromForm() {
+    const emailLocalPart = String(form.getFieldValue('emailLocalPart') ?? '').trim()
+    const emailDomain = String(form.getFieldValue('emailDomain') ?? '').trim().toLowerCase()
+    if (!emailLocalPart || !emailDomain) {
+      return ''
+    }
+    return `${emailLocalPart}@${emailDomain}`.toLowerCase()
+  }
 
   useEffect(() => {
     let active = true
@@ -57,7 +90,14 @@ export function RegistrationScreen({ onRegistered, onBackToLogin }: Registration
   }, [codeCountdown])
 
   async function handleSendCode() {
-    const email = form.getFieldValue('email') as string
+    const email = buildEmailFromForm()
+    if (!email) {
+      try {
+        await form.validateFields(['emailLocalPart', 'emailDomain'])
+      } catch {
+        return
+      }
+    }
     if (!email || !email.includes('@')) {
       appMessage.warning('请先输入有效的邮箱地址')
       return
@@ -90,6 +130,11 @@ export function RegistrationScreen({ onRegistered, onBackToLogin }: Registration
   async function handleSubmit() {
     try {
       const values = await form.validateFields()
+      const email = buildEmailFromForm()
+      if (!email) {
+        appMessage.error('请输入有效的邮箱地址')
+        return
+      }
       if (values.password !== values.confirmPassword) {
         appMessage.error('两次输入的密码不一致')
         return
@@ -111,7 +156,7 @@ export function RegistrationScreen({ onRegistered, onBackToLogin }: Registration
       await requestJson<{ ok: boolean; user?: unknown }>('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({
-          email: values.email,
+          email,
           password: values.password,
           code: values.code || '',
           geetest_params: geetestParams,
@@ -174,11 +219,6 @@ export function RegistrationScreen({ onRegistered, onBackToLogin }: Registration
           <Typography.Title level={2} className="login-title">
             ChatAPI 注册
           </Typography.Title>
-          {config.registration_email_domain_restriction_enabled ? (
-            <Typography.Paragraph className="login-desc" style={{ textAlign: 'center', marginBottom: 0 }}>
-              当前仅允许 {config.registration_email_domains || '指定'} 邮箱域名注册。
-            </Typography.Paragraph>
-          ) : null}
         </div>
         <Form
           form={form}
@@ -186,17 +226,54 @@ export function RegistrationScreen({ onRegistered, onBackToLogin }: Registration
           onFinish={() => void handleSubmit()}
           autoComplete="off"
           className="login-form"
-          initialValues={{ email: '', password: '', confirmPassword: '', code: '' }}
+          initialValues={{
+            emailLocalPart: '',
+            emailDomain: emailDomainOptions[0]?.value ?? DEFAULT_EMAIL_DOMAINS[0],
+            password: '',
+            confirmPassword: '',
+            code: '',
+          }}
         >
-          <Form.Item
-            label="邮箱"
-            name="email"
-            rules={[
-              { required: true, message: '请输入邮箱' },
-              { type: 'email', message: '请输入有效的邮箱地址' },
-            ]}
-          >
-            <Input placeholder="邮箱地址" size="large" />
+          <Form.Item label="邮箱" required style={{ marginBottom: 24 }}>
+            <Input.Group compact className="register-email-group">
+              <Form.Item
+                name="emailLocalPart"
+                noStyle
+                rules={[
+                  { required: true, message: '请输入邮箱' },
+                  {
+                    validator(_, value) {
+                      const localPart = String(value ?? '').trim()
+                      if (!localPart) {
+                        return Promise.resolve()
+                      }
+                      if (/^[A-Za-z0-9._%+-]+$/.test(localPart)) {
+                        return Promise.resolve()
+                      }
+                      return Promise.reject(new Error('请输入有效的邮箱地址'))
+                    },
+                  },
+                ]}
+              >
+                <Input
+                  placeholder="邮箱用户名"
+                  size="large"
+                  className="register-email-input"
+                />
+              </Form.Item>
+              <Form.Item
+                name="emailDomain"
+                noStyle
+                rules={[{ required: true, message: '请选择邮箱域名' }]}
+              >
+                <Select
+                  size="large"
+                  className="register-email-domain"
+                  options={emailDomainOptions}
+                  popupMatchSelectWidth={false}
+                />
+              </Form.Item>
+            </Input.Group>
           </Form.Item>
           <Form.Item
             label="密码"

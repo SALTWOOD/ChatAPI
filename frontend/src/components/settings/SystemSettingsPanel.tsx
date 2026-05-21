@@ -1,70 +1,38 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import { Button, Input, InputNumber, Select, Switch, Typography } from 'antd'
 
 import { appMessage } from '../../lib/antdApp'
 import { requestJson } from '../../lib/api'
 import type { SystemConfig } from '../../types/chat'
+import {
+  formatBytes,
+  isRegistrationEmailDomainError,
+  normalizeSystemConfig,
+} from './systemSettings/config'
+import { useSystemSettingsState } from './systemSettings/useSystemSettingsState'
 
 type SystemSettingsPanelProps = {
   open: boolean
   onClose: () => void
 }
 
-const DEFAULT_CONFIG: SystemConfig = {
-  public_statistics: false,
-  title_enabled: false,
-  title: '',
-  external_registration_enabled: false,
-  email_verification_enabled: false,
-  email_provider: '',
-  email_provider_options: [],
-  registration_email_domain_restriction_enabled: false,
-  registration_email_domains: '',
-  api_key_limit_per_user: 0,
-}
-
-function normalizeSystemConfig(data: Partial<SystemConfig> & { ok?: boolean }): SystemConfig {
-  const nextConfig: SystemConfig = {
-    public_statistics: Boolean(data.public_statistics),
-    title_enabled: Boolean(data.title_enabled),
-    title: String(data.title ?? ''),
-    external_registration_enabled: Boolean(data.external_registration_enabled),
-    email_verification_enabled: Boolean(data.email_verification_enabled),
-    email_provider: String(data.email_provider ?? ''),
-    email_provider_options: Array.isArray(data.email_provider_options)
-      ? data.email_provider_options
-          .filter((option): option is { value: string; label: string } => Boolean(option?.value))
-          .map((option) => ({
-            value: String(option.value),
-            label: String(option.label ?? option.value),
-          }))
-      : [],
-    registration_email_domain_restriction_enabled: Boolean(data.registration_email_domain_restriction_enabled),
-    registration_email_domains: String(data.registration_email_domains ?? ''),
-    api_key_limit_per_user: Number(data.api_key_limit_per_user ?? 0),
-  }
-
-  if (nextConfig.email_verification_enabled && !nextConfig.email_provider && nextConfig.email_provider_options.length > 0) {
-    nextConfig.email_provider = nextConfig.email_provider_options[0].value
-  }
-  if (
-    nextConfig.email_provider &&
-    !nextConfig.email_provider_options.some((option) => option.value === nextConfig.email_provider)
-  ) {
-    nextConfig.email_provider = nextConfig.email_provider_options[0]?.value ?? ''
-  }
-
-  return nextConfig
-}
-
 export function SystemSettingsPanel({ open, onClose }: SystemSettingsPanelProps) {
-  const [config, setConfig] = useState<SystemConfig>(DEFAULT_CONFIG)
-  const [savedConfig, setSavedConfig] = useState<SystemConfig>(DEFAULT_CONFIG)
-  const [, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [testEmail, setTestEmail] = useState('')
-  const [sendingTest, setSendingTest] = useState(false)
-  const [registrationEmailDomainsError, setRegistrationEmailDomainsError] = useState('')
+  const {
+    config,
+    hasUnsavedChanges,
+    registrationEmailDomainsError,
+    saving,
+    sendingTest,
+    setConfig,
+    setLoading,
+    setRegistrationEmailDomainsError,
+    setSavedConfig,
+    setSaving,
+    setSendingTest,
+    setTestEmail,
+    testEmail,
+    updateSection,
+  } = useSystemSettingsState()
 
   useEffect(() => {
     if (!open) return
@@ -87,45 +55,7 @@ export function SystemSettingsPanel({ open, onClose }: SystemSettingsPanelProps)
     }
     void loadConfig()
     return () => { active = false }
-  }, [open])
-
-  const dirtyState = useMemo(
-    () => ({
-      public_statistics: config.public_statistics !== savedConfig.public_statistics,
-      title: config.title_enabled !== savedConfig.title_enabled || config.title !== savedConfig.title,
-      registration:
-        config.external_registration_enabled !== savedConfig.external_registration_enabled
-        || config.email_verification_enabled !== savedConfig.email_verification_enabled
-        || config.email_provider !== savedConfig.email_provider
-        || config.registration_email_domain_restriction_enabled !== savedConfig.registration_email_domain_restriction_enabled
-        || config.registration_email_domains !== savedConfig.registration_email_domains
-        || config.api_key_limit_per_user !== savedConfig.api_key_limit_per_user,
-    }),
-    [config, savedConfig],
-  )
-
-  const hasUnsavedChanges = Object.values(dirtyState).some(Boolean)
-
-  function updateSection<K extends keyof SystemConfig>(key: K, value: SystemConfig[K]) {
-    if (key === 'registration_email_domains') {
-      setRegistrationEmailDomainsError('')
-    }
-    if (key === 'registration_email_domain_restriction_enabled' && !value) {
-      setRegistrationEmailDomainsError('')
-    }
-    if (key === 'email_verification_enabled' && value && !config.email_provider) {
-      const fallbackProvider = config.email_provider_options[0]?.value ?? ''
-      if (fallbackProvider) {
-        setConfig((current) => ({ ...current, [key]: value, email_provider: fallbackProvider }))
-        return
-      }
-    }
-    setConfig((current) => ({ ...current, [key]: value }))
-  }
-
-  function isRegistrationEmailDomainError(message: string) {
-    return message.includes('邮箱域名') || message.includes('允许的域名')
-  }
+  }, [open, setConfig, setLoading, setRegistrationEmailDomainsError, setSavedConfig])
 
   async function handleSave() {
     setSaving(true)
@@ -315,6 +245,74 @@ export function SystemSettingsPanel({ open, onClose }: SystemSettingsPanelProps)
                 onChange={(value) => updateSection('api_key_limit_per_user', Number(value ?? 0))}
               />
             </div>
+          </div>
+        </div>
+
+        <div className="system-settings-row system-settings-row-stacked">
+          <Typography.Text className="system-settings-row-title">实时连接限制</Typography.Text>
+          <div className="system-settings-row-body system-settings-row-body-stacked">
+            <Typography.Text className="system-settings-row-help-static">
+              限制 WebSocket 总连接、单用户连接和每条连接的事件队列。填 0 表示连接数不限制，队列上限必须大于 0。
+            </Typography.Text>
+            <div className="system-settings-compact">
+              <InputNumber
+                addonBefore="全局最大连接数"
+                value={config.realtime_max_connections}
+                min={0}
+                precision={0}
+                onChange={(value) => updateSection('realtime_max_connections', Number(value ?? 0))}
+              />
+              <InputNumber
+                addonBefore="单用户最大连接数"
+                value={config.realtime_max_connections_per_user}
+                min={0}
+                precision={0}
+                onChange={(value) => updateSection('realtime_max_connections_per_user', Number(value ?? 0))}
+              />
+              <InputNumber
+                addonBefore="事件队列上限"
+                value={config.realtime_queue_size}
+                min={1}
+                precision={0}
+                onChange={(value) => updateSection('realtime_queue_size', Math.max(1, Number(value ?? 1)))}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="system-settings-row system-settings-row-stacked">
+          <Typography.Text className="system-settings-row-title">图片存储限制</Typography.Text>
+          <div className="system-settings-row-body system-settings-row-body-stacked">
+            <Typography.Text className="system-settings-row-help-static">
+              超过限制的图片不会落盘，历史消息中会显示“图片已过期”。大小单位为字节，填 0 表示不限制。
+            </Typography.Text>
+            <div className="system-settings-compact">
+              <InputNumber
+                addonBefore="单张上限"
+                value={config.image_max_single_bytes}
+                min={0}
+                precision={0}
+                onChange={(value) => updateSection('image_max_single_bytes', Number(value ?? 0))}
+              />
+              <InputNumber
+                addonBefore="单请求上限"
+                value={config.image_max_request_bytes}
+                min={0}
+                precision={0}
+                onChange={(value) => updateSection('image_max_request_bytes', Number(value ?? 0))}
+              />
+              <InputNumber
+                addonBefore="总容量上限"
+                value={config.image_max_total_bytes}
+                min={0}
+                precision={0}
+                onChange={(value) => updateSection('image_max_total_bytes', Number(value ?? 0))}
+              />
+            </div>
+            <Typography.Text type="secondary">
+              当前占用 {formatBytes(config.image_usage?.total_bytes)} / {config.image_usage?.file_count ?? 0} 个文件；
+              可清理孤儿文件 {formatBytes(config.image_usage?.orphan_bytes)} / {config.image_usage?.orphan_count ?? 0} 个。
+            </Typography.Text>
           </div>
         </div>
 
