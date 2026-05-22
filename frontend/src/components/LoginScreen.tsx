@@ -68,11 +68,11 @@ export function LoginScreen({
           initialValues={{ username: '', password: '', totp: '' }}
         >
           <Form.Item
-            label="邮箱"
+            label="邮箱或用户名"
             name="username"
             rules={[{ required: true, message: '请输入账号' }]}
           >
-            <Input placeholder="使用邮箱地址登录" size="large" />
+            <Input placeholder="使用邮箱或用户名登录" size="large" />
           </Form.Item>
           <Form.Item
             label="密码"
