@@ -5,7 +5,19 @@ from typing import Any, Callable
 
 from ..repositories import ConversationStore
 from .pending import PendingTurnRegistry
+from .thinking import compose_thinking_text
 from .turn_protocols import build_protocol_response_id, normalize_message_text
+
+
+def _normalize_reasoning_stream_mode(value: str) -> str:
+    mode = str(value or "").strip().lower().replace("-", "_")
+    if mode == "summery":
+        mode = "summary"
+    elif mode == "reasoning":
+        mode = "reasoning_text"
+    if mode in {"summary", "reasoning_text"}:
+        return mode
+    return ""
 
 
 class TurnOutputController:
@@ -26,11 +38,20 @@ class TurnOutputController:
         conversation_id: str,
         owner_id: str,
         text: str,
+        reasoning_stream_mode: str = "",
+        kind: str = "answer",
     ):
         pending = self._pending_turns.add_draft(
             conversation_id=conversation_id,
             owner_id=owner_id,
             chunk=normalize_message_text(text),
+            kind=kind,
+        )
+        self._apply_reasoning_stream_mode(
+            pending,
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            reasoning_stream_mode=reasoning_stream_mode,
         )
         conversation = self._store.get_conversation(conversation_id, owner_id)
         if conversation is not None:
@@ -41,6 +62,16 @@ class TurnOutputController:
                     **conversation.metadata,
                     "realtime_status": "waiting",
                     "realtime_draft_text": pending.draft_text,
+                    **(
+                        {"request_format": pending.request_format}
+                        if pending.request_format
+                        else {}
+                    ),
+                    **(
+                        {"reasoning_stream_mode": pending.reasoning_stream_mode}
+                        if pending.request_format == "responses" and pending.reasoning_stream_mode
+                        else {}
+                    ),
                 },
             )
             self._notify(owner_id, conversation_id)
@@ -53,9 +84,20 @@ class TurnOutputController:
         owner_id: str,
         provider: str,
         model: str | None = None,
+        reasoning_stream_mode: str = "",
     ):
         pending = self._require_pending(conversation_id, owner_id)
-        assistant_text = pending.draft_text
+        self._apply_reasoning_stream_mode(
+            pending,
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            reasoning_stream_mode=reasoning_stream_mode,
+        )
+        assistant_text = (
+            compose_thinking_text(pending.draft_segments)
+            if pending.request_format != "responses" and pending.draft_segments
+            else pending.draft_answer_text or pending.draft_text
+        )
         if not assistant_text.strip():
             raise ValueError("assistant message text is required")
         response_id = build_protocol_response_id(pending.request_format, pending.request_id)
@@ -79,6 +121,12 @@ class TurnOutputController:
                 **updated_conversation.metadata,
                 "realtime_status": "closed",
                 "realtime_draft_text": "",
+                "request_format": pending.request_format,
+                **(
+                    {"reasoning_stream_mode": pending.reasoning_stream_mode}
+                    if pending.request_format == "responses" and pending.reasoning_stream_mode
+                    else {}
+                ),
             },
         )
         self._notify(owner_id, conversation_id)
@@ -103,8 +151,15 @@ class TurnOutputController:
         provider: str,
         model: str | None = None,
         tool_call_id: str | None = None,
+        reasoning_stream_mode: str = "",
     ):
         pending = self._require_pending(conversation_id, owner_id)
+        self._apply_reasoning_stream_mode(
+            pending,
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            reasoning_stream_mode=reasoning_stream_mode,
+        )
         call_id = tool_call_id or f"call_{uuid.uuid4().hex[:24]}"
         assistant_text = f"{tool_name}({arguments})"
         response_id = build_protocol_response_id(pending.request_format, pending.request_id)
@@ -141,6 +196,12 @@ class TurnOutputController:
                 **updated_conversation.metadata,
                 "realtime_status": "closed",
                 "realtime_draft_text": "",
+                "request_format": pending.request_format,
+                **(
+                    {"reasoning_stream_mode": pending.reasoning_stream_mode}
+                    if pending.request_format == "responses" and pending.reasoning_stream_mode
+                    else {}
+                ),
             },
         )
         self._notify(owner_id, conversation_id)
@@ -173,6 +234,21 @@ class TurnOutputController:
         if pending is None or pending.owner_id != owner_id:
             raise ValueError("conversation is not waiting for a reply")
         return pending
+
+    def _apply_reasoning_stream_mode(
+        self,
+        pending,
+        *,
+        conversation_id: str,
+        owner_id: str,
+        reasoning_stream_mode: str,
+    ) -> None:
+        if pending.request_format != "responses":
+            return
+
+        requested_mode = _normalize_reasoning_stream_mode(reasoning_stream_mode)
+        if requested_mode:
+            pending.reasoning_stream_mode = requested_mode
 
     def _notify(self, owner_id: str, conversation_id: str) -> None:
         if self._publish_sync is None:

@@ -183,45 +183,12 @@ def stream_pending_turn(
                 },
             )
 
-        def emit_reasoning_block(text: str) -> Generator[str, None, None]:
-            nonlocal sent_thinking_text
-            if not text:
-                return
-            yield from close_text_item()
-            item_id = f"rs_{uuid.uuid4().hex[:24]}"
-            item_index = next_output_index()
-            item = {
-                "id": item_id,
-                "type": "reasoning",
-                "status": "completed",
-                "summary": [
-                    {
-                        "type": "summary_text",
-                        "text": text,
-                    }
-                ],
-                "content": [
-                    {
-                        "type": "reasoning_text",
-                        "text": text,
-                    }
-                ],
-            }
-            sent_thinking_text += ("\n\n" if sent_thinking_text else "") + text
-            yield emit(
-                "response.output_item.added",
-                {
-                    "type": "response.output_item.added",
-                    "item": {
-                        "id": item_id,
-                        "type": "reasoning",
-                        "status": "in_progress",
-                        "summary": [],
-                        "content": [],
-                    },
-                    "output_index": item_index,
-                },
-            )
+        def emit_reasoning_summary_events(
+            *,
+            item_id: str,
+            item_index: int,
+            text: str,
+        ) -> Generator[str, None, None]:
             yield emit(
                 "response.reasoning_summary_part.added",
                 {
@@ -268,6 +235,111 @@ def stream_pending_turn(
                     },
                 },
             )
+
+        def emit_reasoning_text_events(
+            *,
+            item_id: str,
+            item_index: int,
+            text: str,
+        ) -> Generator[str, None, None]:
+            yield emit(
+                "response.content_part.added",
+                {
+                    "type": "response.content_part.added",
+                    "content_index": 0,
+                    "item_id": item_id,
+                    "output_index": item_index,
+                    "part": {
+                        "type": "reasoning_text",
+                        "text": "",
+                    },
+                },
+            )
+            yield emit(
+                "response.reasoning_text.delta",
+                {
+                    "type": "response.reasoning_text.delta",
+                    "content_index": 0,
+                    "delta": text,
+                    "item_id": item_id,
+                    "output_index": item_index,
+                },
+            )
+            yield emit(
+                "response.reasoning_text.done",
+                {
+                    "type": "response.reasoning_text.done",
+                    "content_index": 0,
+                    "item_id": item_id,
+                    "output_index": item_index,
+                    "text": text,
+                },
+            )
+            yield emit(
+                "response.content_part.done",
+                {
+                    "type": "response.content_part.done",
+                    "content_index": 0,
+                    "item_id": item_id,
+                    "output_index": item_index,
+                    "part": {
+                        "type": "reasoning_text",
+                        "text": text,
+                    },
+                },
+            )
+
+        def emit_reasoning_block(text: str) -> Generator[str, None, None]:
+            nonlocal sent_thinking_text
+            if not text:
+                return
+            yield from close_text_item()
+            item_id = f"rs_{uuid.uuid4().hex[:24]}"
+            item_index = next_output_index()
+            item = {
+                "id": item_id,
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": text,
+                    }
+                ],
+                "content": [
+                    {
+                        "type": "reasoning_text",
+                        "text": text,
+                    }
+                ],
+            }
+            sent_thinking_text += ("\n\n" if sent_thinking_text else "") + text
+            yield emit(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "item": {
+                        "id": item_id,
+                        "type": "reasoning",
+                        "status": "in_progress",
+                        "summary": [],
+                        "content": [],
+                    },
+                    "output_index": item_index,
+                },
+            )
+            if pending.reasoning_stream_mode == "reasoning_text":
+                yield from emit_reasoning_text_events(
+                    item_id=item_id,
+                    item_index=item_index,
+                    text=text,
+                )
+            else:
+                yield from emit_reasoning_summary_events(
+                    item_id=item_id,
+                    item_index=item_index,
+                    text=text,
+                )
             yield emit(
                 "response.output_item.done",
                 {
@@ -326,6 +398,17 @@ def stream_pending_turn(
                     return
 
                 for chunk in pending_turns.consume_draft_chunks(pending.request_id):
+                    if isinstance(chunk, dict):
+                        chunk_text = str(chunk.get("text") or "")
+                        chunk_kind = str(chunk.get("kind") or "").strip()
+                        if not chunk_text:
+                            continue
+                        if chunk_kind == "thinking":
+                            yield from emit_reasoning_block(chunk_text)
+                        else:
+                            sent_raw_text += chunk_text
+                            yield from emit_answer_delta(chunk_text)
+                        continue
                     sent_raw_text += chunk
                     yield from emit_parsed_text(chunk)
 

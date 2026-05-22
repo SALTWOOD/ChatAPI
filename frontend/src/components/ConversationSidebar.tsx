@@ -69,6 +69,18 @@ type ConversationSidebarProps = {
   totpEnabled: boolean
 }
 
+function stripThinkBlocks(text: string): string {
+  return text
+    .replace(/<think(?:\s[^>]*)?>[\s\S]*?<\/think>/gi, '')
+    .trim()
+}
+
+function conversationPreview(item: Conversation): string {
+  const preview = stripThinkBlocks(item.last_message_preview || '')
+  if (preview) return preview
+  return item.last_user_text || '尚无消息'
+}
+
 export function ConversationSidebar({
   abortPopoverConversationId,
   abortReason,
@@ -203,7 +215,7 @@ export function ConversationSidebar({
                         className="conversation-preview"
                         ellipsis={{ rows: 2 }}
                       >
-                        {item.last_message_preview || item.last_user_text || '尚无消息'}
+                        {conversationPreview(item)}
                       </Typography.Paragraph>
                       <Typography.Text className="conversation-time">
                         {item.message_count > 0

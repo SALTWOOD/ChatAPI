@@ -52,6 +52,20 @@ def answer_text(text: str) -> str:
     ).strip()
 
 
+def compose_thinking_text(parts: list[dict[str, str]]) -> str:
+    chunks: list[str] = []
+    for part in parts:
+        part_type = str(part.get("type") or "")
+        text = str(part.get("text") or "")
+        if not text:
+            continue
+        if part_type == "thinking":
+            chunks.append(f"<think>{text}</think>")
+        else:
+            chunks.append(text)
+    return "".join(chunks).strip()
+
+
 class ThinkingStreamParser:
     def __init__(self) -> None:
         self._buffer = ""

@@ -18,6 +18,7 @@ import type {
   AuthUser,
   ComposerMode,
   Conversation,
+  ReasoningStreamMode,
   ResponsesPayload,
   ToolFieldValue,
   MessageItem,
@@ -35,6 +36,8 @@ export function useChatWorkspace(isMobile: boolean) {
   const [composer, setComposer] = useState('')
   const [thinkingText, setThinkingText] = useState('')
   const [composerMode, setComposerMode] = useState<ComposerMode>('assistant_message')
+  const [reasoningStreamMode, setReasoningStreamMode] =
+    useState<ReasoningStreamMode>('summery')
   const [toolName, setToolName] = useState('')
   const [toolCallId, setToolCallId] = useState('')
   const [toolFormValues, setToolFormValues] = useState<Record<string, ToolFieldValue>>({})
@@ -88,6 +91,8 @@ export function useChatWorkspace(isMobile: boolean) {
     ? draftBuffers[selectedConversationId] ?? ''
     : selectedConversation?.metadata?.realtime_draft_text ?? ''
   const isWaitingForUser = selectedConversation?.metadata?.realtime_status === 'waiting'
+  const selectedRequestFormat = selectedConversation?.metadata?.request_format || ''
+  const isResponsesConversation = selectedRequestFormat === 'responses'
   const availableToolSchemas = getLastToolSchemas(messages)
   const selectedToolSchema =
     availableToolSchemas.find((item) => item.name === toolName) ?? null
@@ -99,18 +104,6 @@ export function useChatWorkspace(isMobile: boolean) {
       ...prev,
       [conversationId]: value,
     }))
-  }
-
-  function buildAssistantTextWithThinking(answerText: string, reasoningText: string) {
-    const normalizedAnswer = answerText.trim()
-    const normalizedReasoning = reasoningText.trim()
-    if (!normalizedReasoning) return normalizedAnswer
-    const thinkingBlock = `<think>
-${normalizedReasoning}
-</think>`
-    return normalizedAnswer ? `${thinkingBlock}
-
-${normalizedAnswer}` : thinkingBlock
   }
 
   function clearThinkingInput() {
@@ -206,6 +199,7 @@ ${normalizedAnswer}` : thinkingBlock
       setComposer('')
       clearThinkingInput()
       setComposerMode('assistant_message')
+      setReasoningStreamMode('summery')
       setToolName('')
       setToolCallId('')
       setToolFormValues({})
@@ -326,7 +320,7 @@ ${normalizedAnswer}` : thinkingBlock
     }
     const isThinkingMode = composerMode === 'thinking'
     const rawChunk = isThinkingMode
-      ? buildAssistantTextWithThinking('', thinkingText.trim())
+      ? thinkingText.trim()
       : composer.trim()
     if (!rawChunk) return
     const chunk = withDraftSeparator(rawChunk)
@@ -339,6 +333,9 @@ ${normalizedAnswer}` : thinkingBlock
         body: JSON.stringify({
           text: chunk,
           conversation_id: selectedConversationId || undefined,
+          kind: isThinkingMode ? 'thinking' : 'answer',
+          reasoning_stream_mode:
+            isThinkingMode && isResponsesConversation ? reasoningStreamMode : undefined,
         }),
       })
       setDraftBufferForConversation(
@@ -416,11 +413,23 @@ ${normalizedAnswer}` : thinkingBlock
         tool_call_id:
           composerMode === 'tool_call' ? toolCallId.trim() || undefined : undefined,
         conversation_id: selectedConversationId || undefined,
+        reasoning_stream_mode:
+          composerMode === 'thinking' && isResponsesConversation
+            ? reasoningStreamMode
+            : undefined,
       }
       const response = await requestJson<ResponsesPayload>('/api/chat/output/complete', {
         method: 'POST',
         body: JSON.stringify(payload),
       })
+      if (response.conversation) {
+        setConversations((current) => {
+          const remaining = current.filter((item) => item.id !== response.conversation.id)
+          return [response.conversation, ...remaining].sort(
+            (left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at),
+          )
+        })
+      }
       const nextConversationId = response.conversation?.id ?? selectedConversationId
       if (nextConversationId) {
         applySelectedConversation(nextConversationId)
@@ -513,13 +522,17 @@ ${normalizedAnswer}` : thinkingBlock
     automationRulesModalOpen: automation.automationRulesModalOpen,
     selectedConversation,
     selectedConversationId,
+    selectedRequestFormat,
     selectedToolSchema,
+    isResponsesConversation,
+    reasoningStreamMode,
     sending,
     setAbortPopoverConversationId,
     setAbortReason,
     setComposer,
     setComposerMode,
     setThinkingText,
+    setReasoningStreamMode,
     setDrawerOpen,
     setEditingAutomationRule: automation.setEditingAutomationRule,
     setPruneKeepCount,

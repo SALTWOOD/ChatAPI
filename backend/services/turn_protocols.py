@@ -465,6 +465,9 @@ def resolve_conversation_for_request(
         conversation = store.get_conversation(explicit_conversation_id, owner)
         if conversation is None:
             return None, ("conversation not found", 404)
+        locked_format = str(conversation.metadata.get("request_format", "")).strip().lower().replace("-", "_")
+        if locked_format and locked_format != request_format:
+            return None, ("conversation protocol is already locked", 409)
         return ResolvedConversation(conversation=conversation, source="explicit_id"), None
 
     for call_id in extract_tool_result_call_ids(data, request_format):

@@ -186,15 +186,18 @@ export function WorkspaceRoute() {
             onOpenDrawer={() => workspace.setDrawerOpen(true)}
             onSend={workspace.handleSend}
             selectedConversationTitle={workspace.selectedConversation?.title || ''}
+            selectedRequestFormat={workspace.selectedRequestFormat}
             selectedToolSchema={workspace.selectedToolSchema}
             sending={workspace.sending}
             setComposer={workspace.setComposer}
             setComposerMode={workspace.setComposerMode}
             setThinkingText={workspace.setThinkingText}
+            setReasoningStreamMode={workspace.setReasoningStreamMode}
             setToolCallId={workspace.setToolCallId}
             setToolFormValues={workspace.setToolFormValues}
             setToolName={workspace.setToolName}
             thinkingText={workspace.thinkingText}
+            reasoningStreamMode={workspace.reasoningStreamMode}
             toolCallId={workspace.toolCallId}
             toolFormValues={workspace.toolFormValues}
             toolName={workspace.toolName}

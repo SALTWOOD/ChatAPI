@@ -27,6 +27,7 @@ import { ToolField } from './ToolField'
 import { ChatMessageList } from './ChatMessageList'
 import type {
   ComposerMode,
+  ReasoningStreamMode,
   ToolFieldValue,
   ToolSchemaOption,
   VisibleMessage,
@@ -50,15 +51,18 @@ type ChatPaneProps = {
   onOpenDrawer: () => void
   onSend: () => void | Promise<void>
   selectedConversationTitle: string
+  selectedRequestFormat: string
   selectedToolSchema: ToolSchemaOption | null
   sending: boolean
   setComposer: (value: string) => void
   setComposerMode: (value: ComposerMode) => void
   setThinkingText: (value: string) => void
+  setReasoningStreamMode: (value: ReasoningStreamMode) => void
   setToolCallId: (value: string) => void
   setToolFormValues: Dispatch<SetStateAction<Record<string, ToolFieldValue>>>
   setToolName: (value: string) => void
   thinkingText: string
+  reasoningStreamMode: ReasoningStreamMode
   toolCallId: string
   toolFormValues: Record<string, ToolFieldValue>
   toolName: string
@@ -82,15 +86,18 @@ export function ChatPane(props: ChatPaneProps) {
     onOpenDrawer,
     onSend,
     selectedConversationTitle,
+    selectedRequestFormat,
     selectedToolSchema,
     sending,
     setComposer,
     setComposerMode,
     setThinkingText,
+    setReasoningStreamMode,
     setToolCallId,
     setToolFormValues,
     setToolName,
     thinkingText,
+    reasoningStreamMode,
     toolCallId,
     toolFormValues,
     toolName,
@@ -168,6 +175,11 @@ export function ChatPane(props: ChatPaneProps) {
   } as CSSProperties
 
   const toolFields = Object.entries(selectedToolSchema?.parameters.properties ?? {})
+  const isResponsesConversation = selectedRequestFormat === 'responses'
+  const reasoningModeOptions = [
+    { label: 'summery 模式', value: 'summery' },
+    { label: 'reasoning 模式', value: 'reasoning' },
+  ]
 
   return (
     <div className="chat-pane" style={paneStyle}>
@@ -221,19 +233,33 @@ export function ChatPane(props: ChatPaneProps) {
               </div>
             )}
             <div className="composer-mode-row">
-              <Segmented
-                value={composerMode}
-                onChange={(value) => {
-                  const nextMode = value as ComposerMode
-                  setComposerMode(nextMode)
-                }}
-                options={[
-                  { label: 'Assistant Message', value: 'assistant_message' },
-                  { label: '添加思考', value: 'thinking' },
-                  { label: 'Tool Call', value: 'tool_call' },
-                ]}
-                disabled={sending || !isWaitingForUser}
-              />
+              <Space wrap align="center" size={10}>
+                <Segmented
+                  value={composerMode}
+                  onChange={(value) => {
+                    const nextMode = value as ComposerMode
+                    setComposerMode(nextMode)
+                  }}
+                  options={[
+                    { label: 'Assistant Message', value: 'assistant_message' },
+                    { label: '添加思考内容', value: 'thinking' },
+                    { label: 'Tool Call', value: 'tool_call' },
+                  ]}
+                  disabled={sending || !isWaitingForUser}
+                />
+                {composerMode === 'thinking' && isResponsesConversation ? (
+                  <div className="reasoning-mode-selector">
+                    <Select
+                      value={reasoningStreamMode}
+                      onChange={(value) => setReasoningStreamMode(value as ReasoningStreamMode)}
+                      options={reasoningModeOptions}
+                      disabled={sending || !isWaitingForUser}
+                      className="reasoning-mode-select"
+                      dropdownMatchSelectWidth={false}
+                    />
+                  </div>
+                ) : null}
+              </Space>
             </div>
             {composerMode === 'tool_call' && (
               <div className="tool-call-panel">
@@ -302,7 +328,9 @@ export function ChatPane(props: ChatPaneProps) {
                 <div className="thinking-panel-header">
                   <Typography.Text className="thinking-panel-title">公开思考内容</Typography.Text>
                   <Typography.Text className="thinking-panel-hint">
-                    会自动以 &lt;think&gt;...&lt;/think&gt; 输出给调用方
+                    当前会以{' '}
+                    {reasoningStreamMode === 'reasoning' ? 'reasoning' : 'summery'}
+                    输出给调用方
                   </Typography.Text>
                 </div>
                 <TextArea
@@ -342,8 +370,12 @@ export function ChatPane(props: ChatPaneProps) {
               {isWaitingForUser
                 ? composerMode === 'assistant_message'
                   ? '流式输出的片段会保留在本轮回复里，结束输出之后这一轮结束。'
-                  : composerMode === 'thinking'
-                    ? '思考内容会包成 <think>...</think> 追加到当前回复草稿，不会结束这一轮。'
+                : composerMode === 'thinking'
+                    ? `思考内容会以 ${
+                        isResponsesConversation && reasoningStreamMode === 'reasoning'
+                          ? 'reasoning'
+                          : 'summery'
+                      } 追加到当前回复草稿，不会结束这一轮。`
                     : 'Tool Call 模式会根据 schema 组装参数 JSON，点击左侧按钮会直接输出一个 function_call item。'
                 : '没有新的 user 请求时不能输出回复。'}
             </Typography.Text>

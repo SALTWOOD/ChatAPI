@@ -79,6 +79,8 @@ export type Conversation = {
   message_count: number
   last_message_preview: string
   metadata?: {
+    request_format?: 'responses' | 'chat_completions' | 'anthropic_messages' | string
+    reasoning_stream_mode?: 'summary' | 'summery' | 'reasoning_text' | 'reasoning' | string
     realtime_status?: 'waiting' | 'closed' | 'aborted' | string
     realtime_draft_text?: string
   }
@@ -149,6 +151,7 @@ export type ToolSchemaOption = {
 
 export type ToolFieldValue = string | number | boolean
 export type ComposerMode = 'assistant_message' | 'thinking' | 'tool_call'
+export type ReasoningStreamMode = 'summery' | 'reasoning'
 export type VisibleMessage = MessageItem & { draft?: boolean }
 export type GeetestValidationResult = {
   lot_number: string

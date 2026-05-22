@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -14,12 +15,15 @@ class PendingTurn:
     model: str
     input_text: str
     request_format: str = "responses"
+    reasoning_stream_mode: str = ""
     event: threading.Event = field(default_factory=threading.Event)
     stream_event: threading.Event = field(default_factory=threading.Event)
     assistant_text: str = ""
     response_id: str = ""
-    draft_chunks: list[str] = field(default_factory=list)
+    draft_chunks: list[Any] = field(default_factory=list)
     draft_text: str = ""
+    draft_segments: list[dict[str, str]] = field(default_factory=list)
+    draft_answer_text: str = ""
     aborted: bool = False
     abort_message: str = ""
     resolved: bool = False
@@ -44,6 +48,7 @@ class PendingTurnRegistry:
         model: str,
         input_text: str,
         request_format: str = "responses",
+        reasoning_stream_mode: str = "",
         available_tool_names: set[str] | None = None,
         available_tool_schemas: dict[str, dict[str, Any]] | None = None,
     ) -> PendingTurn:
@@ -57,6 +62,7 @@ class PendingTurnRegistry:
                 model=model,
                 input_text=input_text,
                 request_format=request_format,
+                reasoning_stream_mode=reasoning_stream_mode,
                 available_tool_names=available_tool_names or set(),
                 available_tool_schemas=available_tool_schemas or {},
             )
@@ -103,7 +109,7 @@ class PendingTurnRegistry:
             pending.event.set()
             return pending
 
-    def consume_draft_chunks(self, request_id: str) -> list[str]:
+    def consume_draft_chunks(self, request_id: str) -> list[Any]:
         with self._lock:
             pending = self._by_request_id.get(request_id)
             if pending is None:
@@ -118,6 +124,7 @@ class PendingTurnRegistry:
         conversation_id: str,
         owner_id: str,
         chunk: str,
+        kind: str = "answer",
     ) -> PendingTurn:
         with self._lock:
             request_id = self._by_conversation_id.get(conversation_id)
@@ -128,8 +135,28 @@ class PendingTurnRegistry:
                 raise ValueError("conversation is not waiting for a reply")
             if pending.resolved or pending.event.is_set():
                 raise ValueError("conversation reply is already completed")
-            pending.draft_chunks.append(chunk)
-            pending.draft_text += chunk
+            normalized_kind = "thinking" if str(kind).strip() == "thinking" else "answer"
+            if normalized_kind == "thinking":
+                if not pending.draft_segments and pending.draft_text:
+                    pending.draft_segments.append({"type": "answer", "text": pending.draft_text})
+                if pending.draft_segments and pending.draft_segments[-1]["type"] == "thinking":
+                    pending.draft_segments[-1]["text"] += chunk
+                else:
+                    pending.draft_segments.append({"type": "thinking", "text": chunk})
+                pending.draft_chunks.append({"kind": "thinking", "text": chunk})
+                pending.draft_text = _serialize_draft_segments(pending.draft_segments)
+            elif pending.draft_segments:
+                if pending.draft_segments[-1]["type"] == "answer":
+                    pending.draft_segments[-1]["text"] += chunk
+                else:
+                    pending.draft_segments.append({"type": "answer", "text": chunk})
+                pending.draft_chunks.append({"kind": "answer", "text": chunk})
+                pending.draft_answer_text += chunk
+                pending.draft_text = _serialize_draft_segments(pending.draft_segments)
+            else:
+                pending.draft_chunks.append(chunk)
+                pending.draft_text += chunk
+                pending.draft_answer_text += chunk
             pending.stream_event.set()
             return pending
 
@@ -182,3 +209,17 @@ class PendingTurnRegistry:
             self._by_request_id.pop(request_id, None)
             self._by_conversation_id.pop(pending.conversation_id, None)
         return pending
+
+
+def _serialize_draft_segments(segments: list[dict[str, str]]) -> str:
+    payload: list[dict[str, str]] = []
+    for segment in segments:
+        text = str(segment.get("text") or "")
+        if not text:
+            continue
+        segment_type = "reasoning_text" if segment.get("type") == "thinking" else "output_text"
+        payload.append({
+            "type": segment_type,
+            "text": text,
+        })
+    return json.dumps(payload, ensure_ascii=False)

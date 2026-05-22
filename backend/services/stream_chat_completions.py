@@ -47,6 +47,26 @@ def stream_chat_completion_turn(
     def generate():
         sent_text = ""
         sent_role = False
+        thinking_open = False
+
+        def emit_content_delta(content: str) -> dict[str, Any]:
+            nonlocal sent_text
+            sent_text += content
+            return {"content": content}
+
+        def ensure_thinking_open() -> dict[str, Any] | None:
+            nonlocal thinking_open
+            if thinking_open:
+                return None
+            thinking_open = True
+            return emit_content_delta("<think>")
+
+        def ensure_thinking_closed() -> dict[str, Any] | None:
+            nonlocal thinking_open
+            if not thinking_open:
+                return None
+            thinking_open = False
+            return emit_content_delta("</think>")
         try:
             while True:
                 if client_disconnected(client_socket):
@@ -59,12 +79,29 @@ def stream_chat_completion_turn(
                     return
 
                 for piece in pending_turns.consume_draft_chunks(pending.request_id):
-                    delta: dict[str, Any] = {"content": piece}
-                    if not sent_role:
-                        delta["role"] = "assistant"
-                        sent_role = True
-                    sent_text += piece
-                    yield sse_data(chunk(delta))
+                    if isinstance(piece, dict):
+                        piece_text = str(piece.get("text") or "")
+                        piece_kind = str(piece.get("kind") or "").strip()
+                        deltas: list[dict[str, Any]] = []
+                        if piece_kind == "thinking":
+                            open_delta = ensure_thinking_open()
+                            if open_delta is not None:
+                                deltas.append(open_delta)
+                            if piece_text:
+                                deltas.append(emit_content_delta(piece_text))
+                        else:
+                            close_delta = ensure_thinking_closed()
+                            if close_delta is not None:
+                                deltas.append(close_delta)
+                            if piece_text:
+                                deltas.append(emit_content_delta(piece_text))
+                    else:
+                        deltas = [emit_content_delta(piece)]
+                    for index, delta in enumerate(deltas):
+                        if not sent_role and index == 0:
+                            delta["role"] = "assistant"
+                            sent_role = True
+                        yield sse_data(chunk(delta))
 
                 if pending.event.is_set():
                     finalized = pending_turns.wait(pending.request_id)
@@ -94,6 +131,12 @@ def stream_chat_completion_turn(
                         }
                         yield sse_data(chunk(delta, finish_reason="tool_calls"))
                     else:
+                        close_delta = ensure_thinking_closed()
+                        if close_delta is not None:
+                            if not sent_role:
+                                close_delta["role"] = "assistant"
+                                sent_role = True
+                            yield sse_data(chunk(close_delta))
                         remaining = finalized.assistant_text
                         if remaining.startswith(sent_text):
                             remaining = remaining[len(sent_text):]
