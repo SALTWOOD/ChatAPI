@@ -33,7 +33,6 @@ export function useChatWorkspace(isMobile: boolean) {
   const [loadedConversationIds, setLoadedConversationIds] = useState<Set<string>>(() => new Set())
   const [messagesLoading, setMessagesLoading] = useState(true)
   const [composer, setComposer] = useState('')
-  const [thinkingEnabled, setThinkingEnabled] = useState(false)
   const [thinkingText, setThinkingText] = useState('')
   const [composerMode, setComposerMode] = useState<ComposerMode>('assistant_message')
   const [toolName, setToolName] = useState('')
@@ -115,8 +114,12 @@ ${normalizedAnswer}` : thinkingBlock
   }
 
   function clearThinkingInput() {
-    setThinkingEnabled(false)
     setThinkingText('')
+  }
+
+  function withDraftSeparator(text: string) {
+    if (!draftBuffer.trim()) return text
+    return text.startsWith('\n') ? text : `\n\n${text}`
   }
 
   useEffect(() => {
@@ -321,14 +324,12 @@ ${normalizedAnswer}` : thinkingBlock
       await handleSend({ resetMode: true, successMessage: '已输出 Tool Call' })
       return
     }
-    const reasoningChunk = thinkingEnabled ? thinkingText.trim() : ''
-    const answerChunk = composer.trim()
-    if (!reasoningChunk && !answerChunk) return
-    if (reasoningChunk && draftBuffer.trim()) {
-      appMessage.warning('已有流式输出时不能再在开头插入思考内容')
-      return
-    }
-    const chunk = buildAssistantTextWithThinking(answerChunk, reasoningChunk)
+    const isThinkingMode = composerMode === 'thinking'
+    const rawChunk = isThinkingMode
+      ? buildAssistantTextWithThinking('', thinkingText.trim())
+      : composer.trim()
+    if (!rawChunk) return
+    const chunk = withDraftSeparator(rawChunk)
     try {
       const response = await requestJson<{
         draft_text?: string
@@ -344,11 +345,12 @@ ${normalizedAnswer}` : thinkingBlock
         selectedConversationId,
         typeof response.draft_text === 'string' ? response.draft_text : `${draftBuffer}${chunk}`,
       )
-      setComposer('')
-      if (reasoningChunk) {
+      if (isThinkingMode) {
         clearThinkingInput()
+      } else {
+        setComposer('')
       }
-      appMessage.success(reasoningChunk ? '已输出思考片段' : '已输出片段')
+      appMessage.success(isThinkingMode ? '已输出思考' : '已输出片段')
     } catch (error) {
       appMessage.error(error instanceof Error ? error.message : '输出片段失败')
     }
@@ -375,15 +377,8 @@ ${normalizedAnswer}` : thinkingBlock
             }
           })()
     const pendingChunk = composerMode === 'assistant_message' ? composer.trim() : ''
-    const pendingReasoning =
-      composerMode === 'assistant_message' && thinkingEnabled ? thinkingText.trim() : ''
 
-    if (composerMode === 'assistant_message' && pendingReasoning && draftBuffer.trim()) {
-      appMessage.warning('已有流式输出时不能再在开头插入思考内容')
-      return
-    }
-
-    if (composerMode === 'assistant_message' && !draftBuffer.trim() && !pendingChunk && !pendingReasoning) {
+    if (composerMode === 'assistant_message' && !draftBuffer.trim() && !pendingChunk) {
       return
     }
 
@@ -393,8 +388,8 @@ ${normalizedAnswer}` : thinkingBlock
 
     setSending(true)
     try {
-      if (composerMode === 'assistant_message' && (pendingChunk || pendingReasoning)) {
-        const outputChunk = buildAssistantTextWithThinking(pendingChunk, pendingReasoning)
+      if (composerMode === 'assistant_message' && pendingChunk) {
+        const outputChunk = withDraftSeparator(pendingChunk)
         const draftResponse = await requestJson<{
           draft_text?: string
           draft_length: number
@@ -431,9 +426,6 @@ ${normalizedAnswer}` : thinkingBlock
         applySelectedConversation(nextConversationId)
       }
       setComposer('')
-      if (composerMode === 'assistant_message' && pendingReasoning) {
-        clearThinkingInput()
-      }
       if (options?.resetMode !== false) {
         setComposerMode('assistant_message')
       }
@@ -472,7 +464,6 @@ ${normalizedAnswer}` : thinkingBlock
     chatScrollRef,
     composer,
     composerMode,
-    thinkingEnabled,
     thinkingText,
     conversations,
     deletingConversationId,
@@ -512,7 +503,6 @@ ${normalizedAnswer}` : thinkingBlock
     setAbortReason,
     setComposer,
     setComposerMode,
-    setThinkingEnabled,
     setThinkingText,
     setDrawerOpen,
     setEditingAutomationRule: automation.setEditingAutomationRule,
