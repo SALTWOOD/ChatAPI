@@ -34,6 +34,29 @@ from .turn_protocols import (
 )
 
 
+def _normalize_reasoning_stream_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower().replace("-", "_")
+    if mode == "summery":
+        mode = "summary"
+    elif mode == "reasoning":
+        mode = "reasoning_text"
+    if mode in {"summary", "reasoning_text"}:
+        return mode
+    return ""
+
+
+def _normalize_request_format(value: Any) -> str:
+    request_format = str(value or "").strip().lower().replace("-", "_")
+    if request_format in {"responses", "chat_completions", "anthropic_messages"}:
+        return request_format
+    return ""
+
+
+def _conversation_request_format(conversation: Any) -> str:
+    metadata = dict(getattr(conversation, "metadata", {}) or {})
+    return _normalize_request_format(metadata.get("request_format"))
+
+
 @dataclass(frozen=True)
 class PreparedTurn:
     pending: PendingTurn
@@ -119,6 +142,42 @@ class TurnCoordinator:
     def build_not_found_error(self, message: str, *, code: str = "not_found", status: int = 404):
         return build_openai_error(message, code=code, status=status)
 
+    def _resolve_reasoning_stream_mode(
+        self,
+        data: dict[str, Any],
+        *,
+        request_format: str,
+        conversation: Any | None,
+    ) -> str:
+        if request_format != "responses":
+            return ""
+
+        requested_mode = _normalize_reasoning_stream_mode(
+            data.get("reasoning_stream_mode")
+            or data.get("responses_reasoning_stream_mode")
+            or data.get("reasoning_mode")
+        )
+        return requested_mode
+
+    def _resolve_conversation_protocol(
+        self,
+        data: dict[str, Any],
+        *,
+        request_format: str,
+        conversation: Any | None,
+    ) -> str:
+        if conversation is None:
+            return request_format
+        metadata = dict(conversation.metadata or {})
+        locked_format = _normalize_request_format(metadata.get("request_format"))
+        if locked_format and locked_format != request_format:
+            raise ValueError("conversation protocol is already locked")
+        if request_format == "responses":
+            return "responses"
+        if locked_format:
+            return locked_format
+        return request_format
+
     def prepare_pending_turn(self, data: dict[str, Any], request_format: str):
         if not isinstance(data, dict):
             return build_openai_error("request body must be a JSON object")
@@ -146,7 +205,15 @@ class TurnCoordinator:
         )
         if conversation_error is not None:
             message, status = conversation_error
-            return build_openai_error(message, code="not_found", status=status)
+            error_code = "conflict" if status == 409 else "not_found"
+            return build_openai_error(message, code=error_code, status=status)
+        if (
+            resolved_conversation is not None
+            and resolved_conversation.source in {"history", "tool_call_id"}
+            and _conversation_request_format(resolved_conversation.conversation)
+            and _conversation_request_format(resolved_conversation.conversation) != request_format
+        ):
+            resolved_conversation = None
         conversation = (
             resolved_conversation.conversation
             if resolved_conversation is not None
@@ -165,6 +232,30 @@ class TurnCoordinator:
                     code="conflict",
                     status=409,
                 )
+
+        try:
+            request_format = self._resolve_conversation_protocol(
+                normalized_data,
+                request_format=request_format,
+                conversation=conversation,
+            )
+            reasoning_stream_mode = self._resolve_reasoning_stream_mode(
+                normalized_data,
+                request_format=request_format,
+                conversation=conversation,
+            )
+        except ValueError as error:
+            return build_openai_error(str(error), code="conflict", status=409)
+
+        conversation_metadata = {
+            **conversation.metadata,
+            "request_format": request_format,
+        }
+        conversation = self.store.update_conversation(
+            conversation.id,
+            owner,
+            metadata=conversation_metadata,
+        )
 
         extracted_messages = extract_request_messages(
             self.store,
@@ -213,6 +304,7 @@ class TurnCoordinator:
             model=model,
             input_text=context_text,
             request_format=request_format,
+            reasoning_stream_mode=reasoning_stream_mode,
             available_tool_names=extract_tool_names(normalized_data),
             available_tool_schemas=extract_tool_schemas(normalized_data),
         )
@@ -264,6 +356,7 @@ class TurnCoordinator:
                     **updated_conversation.metadata,
                     "realtime_status": "waiting",
                     "realtime_draft_text": "",
+                    "request_format": request_format,
                 },
             )
             self._notify(owner, conversation.id)
@@ -329,11 +422,12 @@ class TurnCoordinator:
         if not isinstance(data, dict):
             return {"error": "request body must be a JSON object"}, 400
         mode = str(data.get("mode", "assistant_message")).strip() or "assistant_message"
-        if mode not in {"assistant_message", "tool_call"}:
+        if mode not in {"assistant_message", "thinking", "tool_call"}:
             return {"error": "unsupported mode"}, 400
         text = str(data.get("text", "")).strip()
         tool_name = str(data.get("tool_name", "")).strip()
         tool_call_id = str(data.get("tool_call_id", "")).strip()
+        reasoning_stream_mode = str(data.get("reasoning_stream_mode", "")).strip()
         if mode == "tool_call":
             if not tool_name:
                 return {"error": "tool_name is required"}, 400
@@ -362,6 +456,7 @@ class TurnCoordinator:
                     provider="human",
                     model=str(data.get("model") or pending.model or "mock-gpt-4.1-mini"),
                     tool_call_id=tool_call_id,
+                    reasoning_stream_mode=reasoning_stream_mode,
                 )
                 assistant_text = pending.assistant_text
             else:
@@ -370,6 +465,7 @@ class TurnCoordinator:
                     owner_id=owner,
                     provider="human",
                     model=str(data.get("model") or pending.model or "mock-gpt-4.1-mini"),
+                    reasoning_stream_mode=reasoning_stream_mode,
                 )
                 assistant_text = pending.assistant_text
         except ValueError as error:
@@ -394,6 +490,8 @@ class TurnCoordinator:
         if not text:
             return {"error": "text is required"}, 400
         conversation_id = str(data.get("conversation_id", "")).strip()
+        reasoning_stream_mode = str(data.get("reasoning_stream_mode", "")).strip()
+        chunk_kind = "thinking" if str(data.get("kind", "")).strip() == "thinking" else "answer"
         owner = self.auth.owner_id()
         if not conversation_id:
             return {"error": "conversation_id is required"}, 400
@@ -403,6 +501,8 @@ class TurnCoordinator:
                 conversation_id=conversation_id,
                 owner_id=owner,
                 text=text,
+                reasoning_stream_mode=reasoning_stream_mode,
+                kind=chunk_kind,
             )
         except ValueError as error:
             return {"error": str(error)}, 409

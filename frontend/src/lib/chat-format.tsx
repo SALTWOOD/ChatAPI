@@ -322,12 +322,33 @@ export function renderMessageContent(
   const parts = parseRenderableContent(rawContent)
   if (parts.length === 0) return null
 
-  const thinkingTotal = parts.filter((part) => part.type === 'thinking').length
-  let thinkingSequence = 0
+  const nodes: React.ReactNode[] = []
+  let pendingThinking: string[] = []
 
-  return parts.map((part, index) => {
+  const flushThinking = (key: string) => {
+    if (pendingThinking.length === 0) return
+    nodes.push(
+      <details key={key} className="message-thinking-card">
+        <summary>
+          <span>思考内容</span>
+          <span className="message-thinking-hint">点击展开</span>
+        </summary>
+        <div className="message-thinking-body">{pendingThinking.join('')}</div>
+      </details>,
+    )
+    pendingThinking = []
+  }
+
+  parts.forEach((part, index) => {
+    if (part.type === 'thinking') {
+      pendingThinking.push(part.text)
+      return
+    }
+
+    flushThinking(`thinking-${index}`)
+
     if (part.type === 'image') {
-      return (
+      nodes.push(
         <figure key={`${part.src.slice(0, 32)}-${index}`} className="message-image-card">
           <button
             type="button"
@@ -339,29 +360,20 @@ export function renderMessageContent(
             <img src={part.src} alt={`message image ${index + 1}`} className="message-image" />
           </button>
           {part.detail ? <figcaption>detail: {part.detail}</figcaption> : null}
-        </figure>
+        </figure>,
       )
+      return
     }
 
-    if (part.type === 'thinking') {
-      thinkingSequence += 1
-      return (
-        <details key={`thinking-${index}`} className="message-thinking-card">
-          <summary>
-            <span>{thinkingTotal > 1 ? `思考内容 ${thinkingSequence}` : '思考内容'}</span>
-            <span className="message-thinking-hint">点击展开</span>
-          </summary>
-          <div className="message-thinking-body">{part.text}</div>
-        </details>
-      )
-    }
-
-    return (
+    nodes.push(
       <div key={`text-${index}`} className="message-text-block">
         {part.text}
-      </div>
+      </div>,
     )
   })
+
+  flushThinking(`thinking-${parts.length}`)
+  return nodes
 }
 
 export function buildCurlCommand(requestBody: unknown): string {

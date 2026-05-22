@@ -159,6 +159,14 @@ def stream_anthropic_turn(
                     return
 
                 for piece in pending_turns.consume_draft_chunks(pending.request_id):
+                    if isinstance(piece, dict):
+                        piece_text = str(piece.get("text") or "")
+                        if str(piece.get("kind") or "").strip() == "thinking":
+                            yield from emit_thinking_block(piece_text)
+                        else:
+                            sent_raw_text += piece_text
+                            yield from emit_text_delta(piece_text)
+                        continue
                     sent_raw_text += piece
                     yield from emit_parsed_text(piece)
 

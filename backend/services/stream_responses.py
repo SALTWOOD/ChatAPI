@@ -6,7 +6,6 @@ from typing import Any, Callable, Generator
 
 from flask import stream_with_context
 
-from ..core import settings
 from .pending import PendingTurn, PendingTurnRegistry
 from .response_payloads import build_openai_response, estimate_usage
 from .stream_common import (
@@ -329,7 +328,7 @@ def stream_pending_turn(
                     "output_index": item_index,
                 },
             )
-            if settings.responses_reasoning_stream_mode == "reasoning_text":
+            if pending.reasoning_stream_mode == "reasoning_text":
                 yield from emit_reasoning_text_events(
                     item_id=item_id,
                     item_index=item_index,
@@ -399,6 +398,17 @@ def stream_pending_turn(
                     return
 
                 for chunk in pending_turns.consume_draft_chunks(pending.request_id):
+                    if isinstance(chunk, dict):
+                        chunk_text = str(chunk.get("text") or "")
+                        chunk_kind = str(chunk.get("kind") or "").strip()
+                        if not chunk_text:
+                            continue
+                        if chunk_kind == "thinking":
+                            yield from emit_reasoning_block(chunk_text)
+                        else:
+                            sent_raw_text += chunk_text
+                            yield from emit_answer_delta(chunk_text)
+                        continue
                     sent_raw_text += chunk
                     yield from emit_parsed_text(chunk)
 

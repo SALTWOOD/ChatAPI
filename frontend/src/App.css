@@ -2127,6 +2127,14 @@ body.image-preview-open {
   flex-wrap: wrap;
 }
 
+.reasoning-mode-selector {
+  min-width: 180px;
+}
+
+.reasoning-mode-select {
+  width: 100%;
+}
+
 .thinking-toggle.active {
   box-shadow: 0 10px 24px rgba(59, 130, 246, 0.16);
 }

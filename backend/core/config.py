@@ -87,7 +87,6 @@ class Settings:
     geetest_captcha_id: str
     geetest_captcha_key: str
     geetest_api_server: str
-    responses_reasoning_stream_mode: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -178,21 +177,7 @@ class Settings:
             geetest_captcha_id=_first_non_empty("CHATAPI_GEETEST_CAPTCHA_ID", "GEETEST_CAPTCHA_ID", default=""),
             geetest_captcha_key=_first_non_empty("CHATAPI_GEETEST_CAPTCHA_KEY", "GEETEST_CAPTCHA_KEY", default=""),
             geetest_api_server=_first_non_empty("CHATAPI_GEETEST_API_SERVER", "GEETEST_API_SERVER", default="http://gcaptcha4.geetest.com"),
-            responses_reasoning_stream_mode=_normalize_responses_reasoning_stream_mode(
-                _first_non_empty(
-                    "CHATAPI_RESPONSES_REASONING_STREAM_MODE",
-                    "RESPONSES_REASONING_STREAM_MODE",
-                    default="summary",
-                ),
-            ),
         )
-
-
-def _normalize_responses_reasoning_stream_mode(raw: str) -> str:
-    mode = str(raw or "summary").strip().lower().replace("-", "_")
-    if mode not in {"summary", "reasoning_text"}:
-        return "summary"
-    return mode
 
 
 settings = Settings.from_env()
