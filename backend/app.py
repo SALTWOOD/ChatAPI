@@ -8,6 +8,7 @@ from flask_cors import CORS
 from .core import AppDependencies, AuthContext, settings
 from .repositories import ConversationStore, SystemConfigStore, UserStore, utc_now_iso
 from .services import ImageAssetStore, MessageRateLimiter, PendingTurnRegistry
+from .services.csrf import register_csrf_protection
 from .services.realtime import RealtimeBroker
 from .routes import (
     register_admin_routes,
@@ -43,7 +44,12 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     app.config.update(SECRET_KEY=session_secret)
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+    )
     CORS(app, supports_credentials=True, origins=settings.cors_origins)
+    register_csrf_protection(app, cors_origins=settings.cors_origins)
 
     auth = AuthContext(store, user_store)
     pending_turns = PendingTurnRegistry()
