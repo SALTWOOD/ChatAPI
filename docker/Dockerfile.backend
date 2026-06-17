@@ -1,0 +1,31 @@
+FROM python:3.12-slim
+
+# Install uv (fast Python package manager)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# Copy dependency manifests first (leveraging Docker layer cache)
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies (without the project itself)
+RUN uv sync --frozen --no-dev --no-install-project && \
+    chmod -R a+r /app/.venv
+
+# Copy backend source code
+COPY backend/ ./backend/
+
+# Install the project itself
+RUN uv sync --frozen --no-dev
+
+# Create data directory for SQLite + uploads
+RUN mkdir -p /app/data
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app
+
+EXPOSE 5000
+
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", \
+     "--access-logfile", "-", "--error-logfile", "-", \
+     "backend.app:create_app()"]
